@@ -63,6 +63,8 @@ pub enum Icon {
     Trash,
     /// What is no longer listed (Lucide's eye-off).
     EyeOff,
+    /// What is opened with the administrator's leave (Lucide's shield).
+    Shield,
     /// What a note's format bar puts on the words chosen: bold, slanted, struck through, code.
     Bold,
     Italic,
@@ -157,6 +159,9 @@ impl Icon {
                 "M14.084 14.158a3 3 0 0 1-4.242-4.242",
                 "M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143",
                 "m2 2 20 20",
+            ],
+            Icon::Shield => &[
+                "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C16.51 3.81 19 5 21 5a1 1 0 0 1 1 1z",
             ],
             Icon::Bold => &["M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"],
             Icon::Italic => &["M19 4H10", "M14 20H5", "M15 4 9 20"],

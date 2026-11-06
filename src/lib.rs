@@ -124,6 +124,10 @@ mod widget;
 #[cfg(windows)]
 mod wsl;
 #[cfg(windows)]
+mod dock;
+#[cfg(windows)]
+mod dock_running;
+#[cfg(windows)]
 mod docker;
 #[cfg(windows)]
 mod latency;
@@ -304,6 +308,35 @@ impl App {
             settings.overlay.at = placed.at;
             settings.overlay.screen = Some(placed.point);
             settings.overlay.size = placed.size;
+        });
+    }
+
+    /// The dock changed as `change` asks: kept, and the panel, the settings window and the tray told to follow, as
+    /// with any other setting.
+    #[cfg(windows)]
+    pub fn change_dock(&self, change: impl FnOnce(&mut settings::DockSettings)) {
+        self.change(|settings| change(&mut settings.dock));
+    }
+
+    /// The dock shown, or not, from the tray and from its own menu.
+    #[cfg(windows)]
+    pub fn set_dock(&self, on: bool) {
+        self.change(|settings| settings.dock.on = on);
+    }
+
+    /// The dock's glass made clearer by `by` (less clear, below zero): the wheel over it, as over the overlay's.
+    #[cfg(windows)]
+    pub fn clear_dock(&self, by: f32) {
+        self.change(|settings| settings.dock.clear = (settings.dock.clear + by).clamp(0.0, 1.0));
+    }
+
+    /// The dock was dragged along its edge, to `edge`, and onto the screen `point` of.
+    #[cfg(windows)]
+    pub fn place_dock(&self, placed: dock::Placed) {
+        self.change(|settings| {
+            settings.dock.along = placed.along;
+            settings.dock.edge = placed.edge;
+            settings.dock.screen = Some(placed.point);
         });
     }
 }

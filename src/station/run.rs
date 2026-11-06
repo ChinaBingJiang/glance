@@ -56,6 +56,9 @@ pub enum Ask {
     CopyText(String, Option<Copied>),
     /// What is kept at hand opened, as the shell opens it (see `apps`).
     Launch(String),
+    /// The same, asked of the administrator: the shell's `runas` verb, which asks the person for leave and runs what
+    /// it opens elevated.
+    LaunchAs(String),
 }
 
 /// What is done with files not on the station (see `Ask::Files`): put on the clipboard (copied from the files come
@@ -353,6 +356,21 @@ fn ask_gone(app: &super::apps::App) {
     }
 }
 
+/// `target` opened by the shell with `verb` (the administrator's leave asked of where it says, see `Ask::LaunchAs`).
+/// A file or folder no longer where it was kept is asked about rather than opened; where leave was asked and not
+/// given, nothing happens, and nothing is said of it.
+fn launch(target: &str, verb: windows::core::PCWSTR) {
+    // A file or folder no longer where it was kept: asked whether it is to be taken off.
+    let kept = super::apps::shown().iter().find(|app| app.target == target).cloned();
+    if let Some(app) = kept.filter(|app| app.location().is_some_and(|path| !path.exists())) {
+        ask_gone(&app);
+        return;
+    }
+    unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(None, verb, &windows::core::HSTRING::from(target), None, None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
+    }
+}
+
 fn by_the_shell(act: impl FnOnce() + Send + 'static) {
     let _ = std::thread::Builder::new().name("glance: shell".into()).spawn(move || {
         unsafe {
@@ -584,17 +602,8 @@ impl Station {
                     FilesAct::Open => by_the_shell(move || open(&Content::Files(paths))),
                     FilesAct::Show => by_the_shell(move || show_in_explorer(&paths)),
                 },
-                Ask::Launch(target) => by_the_shell(move || {
-                    // A file or folder no longer where it was kept: asked whether it is to be taken off.
-                    let kept = super::apps::shown().iter().find(|app| app.target == target).cloned();
-                    if let Some(app) = kept.filter(|app| app.location().is_some_and(|path| !path.exists())) {
-                        ask_gone(&app);
-                        return;
-                    }
-                    unsafe {
-                        windows::Win32::UI::Shell::ShellExecuteW(None, w!("open"), &windows::core::HSTRING::from(target.as_str()), None, None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
-                    }
-                }),
+                Ask::Launch(target) => by_the_shell(move || launch(&target, w!("open"))),
+                Ask::LaunchAs(target) => by_the_shell(move || launch(&target, w!("runas"))),
                 Ask::CopyText(text, from) => {
                     self.copy(&Content::Text(text), false, from);
                 }

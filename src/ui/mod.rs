@@ -8,6 +8,7 @@ pub mod backdrop;
 pub mod beside;
 pub mod buttons;
 pub mod canvas;
+pub mod dock;
 pub mod editor;
 pub mod note;
 #[cfg(windows)]
