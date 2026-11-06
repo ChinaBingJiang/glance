@@ -1060,6 +1060,8 @@ enum Page {
     Launchpad,
     Music,
     Phone,
+    /// A page of the machine's own settings: its date, time and zone.
+    DateTime,
     General,
     /// The reports this PC sent, as threads: a page of General's, opened from it (see `Row::MyReports`).
     Reports,
@@ -1092,7 +1094,7 @@ enum NavItem {
     Components,
 }
 
-const NAV_ITEMS: [NavItem; 10] = [
+const NAV_ITEMS: [NavItem; 11] = [
     NavItem::Page(Page::Layout),
     NavItem::Page(Page::Look),
     NavItem::Components,
@@ -1102,6 +1104,7 @@ const NAV_ITEMS: [NavItem; 10] = [
     NavItem::Page(Page::Launchpad),
     NavItem::Page(Page::Music),
     NavItem::Page(Page::Phone),
+    NavItem::Page(Page::DateTime),
     NavItem::Page(Page::General),
 ];
 
@@ -1117,6 +1120,7 @@ impl NavItem {
             NavItem::Page(Page::Launchpad) => pick(lang, "启动台", "Launchpad"),
             NavItem::Page(Page::Music) => pick(lang, "音乐", "Music"),
             NavItem::Page(Page::Phone) => pick(lang, "手机互联", "Phone"),
+            NavItem::Page(Page::DateTime) => pick(lang, "时间与语言", "Time & Language"),
             NavItem::Page(Page::General | Page::Reports) => pick(lang, "通用", "General"),
         }
     }
@@ -1134,6 +1138,7 @@ impl Page {
             Page::Launchpad => Icon::Grid3x3,
             Page::Music => Icon::Music,
             Page::Phone => Icon::Smartphone,
+            Page::DateTime => Icon::Clock,
             Page::General | Page::Reports => Icon::Settings,
         }
     }
@@ -1351,6 +1356,9 @@ enum Switch {
     DockMagnify,
     DockRunning,
     DockShowOpen,
+    /// Whether the clock runs 24-hour, and shows seconds: the machine's own, read live (see `system_settings`).
+    Clock24,
+    Seconds,
 }
 
 /// The remote's switches, the lights' program fetched (`lights`) or not, on a laptop or not: the lights set, the
@@ -1534,6 +1542,8 @@ enum Row {
     Phone(String, String),
     /// What the rows under it are, said small above them: a group of their own.
     Group(&'static str),
+    /// A line read from the machine, told rather than set: what one of its own pages shows but does not keep.
+    Info(String),
     /// NetEase Cloud Music's lyrics plugin (InfLink-rs): how it is, and installing or taking it back.
     NetEase,
 }
@@ -2386,7 +2396,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         // (Measuring: a page, and a tab of the monitor's, turned to as a press on it turns to it; see `perf`.)
         PERF_TURN if crate::perf::on() => {
-            const PAGES: [Page; 9] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Dock, Page::Launchpad, Page::Music, Page::Phone, Page::General];
+            const PAGES: [Page; 10] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Dock, Page::Launchpad, Page::Music, Page::Phone, Page::DateTime, Page::General];
             const TABS: [Tab; 3] = [Tab::Shown, Tab::Data, Tab::Overlay];
             with_ui(|ui| {
                 crate::perf::mark(|| format!("settings turn {} {}", wparam.0, lparam.0));
@@ -2842,6 +2852,24 @@ impl Ui {
                 }
                 rows.push(Row::Quit);
             }
+            // The machine's own date and time: the clock's face, its seconds, the zone read live.
+            (Page::DateTime, _) => {
+                let lang = self.lang;
+                rows.push(Row::Group(pick(lang, "日期与时间", "Date & Time")));
+                rows.push(Row::Switch(Switch::Clock24));
+                rows.push(Row::Switch(Switch::Seconds));
+                let zone = super::system_settings::current_zone();
+                rows.push(Row::Info(format!(
+                    "{} · {}",
+                    pick(lang, "当前时区", "Current zone"),
+                    if zone.is_empty() { pick(lang, "未知", "Unknown") } else { zone.as_str() }
+                )));
+                rows.push(Row::Note(pick(
+                    lang,
+                    "改时区与校时需管理员权限；自动校时仍由系统管",
+                    "Changing the zone and syncing the clock want an administrator's leave; keeping the time automatic is the system's",
+                )));
+            }
         }
         rows
     }
@@ -3049,6 +3077,7 @@ impl Ui {
                 Row::Title => (0.0, TITLE),
                 Row::Tabs => (0.0, TABS_ROW),
                 Row::Note(words) => (12.0, self.gfx.wrapped_height(words, Font::new(Family::Segoe, HINT, 400.0), self.cards() - 8.0) + 8.0),
+                Row::Info(words) => (12.0, self.gfx.wrapped_height(words, Font::new(Family::Segoe, HINT, 400.0), self.cards() - 8.0) + 8.0),
                 Row::Slider(_) => (if after_heading { 8.0 } else { ROW_GAP }, ROW),
                 Row::Skins => (if after_heading { 8.0 } else { ROW_GAP }, SKINS_ROW),
                 Row::Library => (if after_heading { 8.0 } else { ROW_GAP }, self.library_height()),
@@ -4029,6 +4058,8 @@ impl Ui {
                 };
                 return (p("开启手机互联", "Phone remote"), Some(Cow::Borrowed(hint)), self.remote);
             }
+            Switch::Clock24 => (p("24 小时制", "24-hour clock"), None, super::system_settings::clock_24()),
+            Switch::Seconds => (p("显示秒数", "Show seconds"), None, super::system_settings::clock_seconds()),
             // The version this is, where the user looks for a newer one.
             Switch::Updates => {
                 return (p("自动检查更新", "Check for updates"), Some(Cow::Borrowed(p("每天检查一次，并向 Glance 网站告知当前版本，用于统计使用情况。发送过诊断信息时，一并获取其回复。不包含可识别这台电脑的信息", "Once a day. Glance's site is told this version, to count how many run it, and asked for replies to the diagnostics sent. Nothing that tells this PC from another"))), self.settings.check_updates);
@@ -4069,6 +4100,9 @@ impl Ui {
             Switch::DockMagnify => settings.dock.magnify ^= true,
             Switch::DockRunning => settings.dock.running ^= true,
             Switch::DockShowOpen => settings.dock.show_open ^= true,
+            // The machine's own clock switches write the registry and go on: nothing of Glance's settings changes.
+            Switch::Clock24 => super::system_settings::toggle_clock24(),
+            Switch::Seconds => super::system_settings::toggle_seconds(),
             Switch::Updates => settings.check_updates ^= true,
             Switch::HeatAlert => settings.heat_alert ^= true,
             Switch::TrayHidden => settings.tray_hidden ^= true,
@@ -5016,7 +5050,7 @@ impl Ui {
                 Row::RecentFolder(folder) => vec![Target::RecentFolder(folder)],
                 Row::AddRecentFolder if self.choosing_folders.is_some() => vec![],
                 Row::AddRecentFolder => vec![Target::AddRecentFolder],
-                Row::Title | Row::Note(_) => vec![],
+                Row::Title | Row::Note(_) | Row::Info(_) => vec![],
             }))
             .chain(editor)
             .collect()
@@ -5798,6 +5832,7 @@ impl Ui {
                     self.targets.push((Rect { x: left, y, w: width, h: row_height }, target));
                 }
                 Row::Note(words) => frame.text_wrapped(words, hint, palette.text2, left + 4.0, y + 4.0, width - 8.0),
+                Row::Info(words) => frame.text_wrapped(&words, label, palette.text, left + 4.0, y + 4.0, width - 8.0),
                 Row::Slider(field) => {
                     card(frame, palette, left, y, width, row_height, palette.card);
                     let (name, min, max, _, value) = self.slider(field);
