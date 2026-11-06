@@ -233,6 +233,20 @@ pub fn runs(path: &Path) -> bool {
     path.extension().is_some_and(|extension| PROGRAMS.iter().any(|program| extension.eq_ignore_ascii_case(program)))
 }
 
+/// Whether what the Start menu lists under `name`, lying at `where_it_lies`, is a program's door out rather than a
+/// program to be used: "Uninstall Foo", "卸载 Foo", a shortcut standing in an installer's own `Uninstall` folder, or
+/// Inno Setup's `unins000.exe`. Such a thing says nothing of itself: it is only ever run to take another program off
+/// the machine, and so is no program to be found by name. A utility whose own name says what it is (Revo Uninstaller)
+/// stays, for all its word: only a name beginning with the word is a door out.
+pub fn is_uninstaller(name: &str, where_it_lies: &str) -> bool {
+    let named = name.trim().to_lowercase();
+    if named.starts_with("卸载") || named.starts_with("uninstall") { return true; }
+    let lies = where_it_lies.to_lowercase().replace('/', "\\");
+    let (folder, last) = match lies.rsplit_once('\\') { Some((here, one)) => (here, one), None => ("", lies.as_str()) };
+    let stem = last.split('.').next().unwrap_or(last);
+    folder.split('\\').any(|part| part == "uninstall") || stem.starts_with("unins") || stem == "uninstall"
+}
+
 /// The thing kept that opens `moving` put before the one that opens `before` (none: last), each found where it is
 /// now (what is kept may have changed since they were shown): nothing where it is gone, or put before itself.
 pub fn put_before(apps: &mut Vec<App>, moving: &str, before: Option<&str>) {
@@ -363,5 +377,16 @@ mod tests {
         let store = App { target: r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into(), name: "Calculator".into() };
         assert_eq!(store.location(), None);
         assert!(App::of_url("ftp://x").is_none());
+    }
+
+    /// A door out known by its words or by where it stands; a utility whose own name says it stays on the list.
+    #[test]
+    fn leaves_the_door_out_off_the_list() {
+        assert!(is_uninstaller("Uninstall Foo", r"C:\Tools\Foo\Uninstall.exe"));
+        assert!(is_uninstaller("卸载 Foo", r"C:\Tools\Foo\foo.exe"));
+        assert!(is_uninstaller("Foo", r"C:\Tools\Foo\uninstall\remove.exe"));
+        assert!(is_uninstaller("Foo", r"C:\Tools\Foo\unins000.exe"));
+        assert!(!is_uninstaller("Revo Uninstaller", r"C:\Tools\Revo\RevoUninstaller.exe"));
+        assert!(!is_uninstaller("Foo", r"C:\Tools\Foo\Foo.exe"));
     }
 }

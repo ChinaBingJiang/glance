@@ -1,5 +1,6 @@
 //! Every program Windows lists in its Start menu (`shell:AppsFolder`: desktop programs and Store apps alike, not the
-//! documents, folders and web addresses it lists beside them), by name and by what opens it, for quick launch's choosing (see `ui::beside`). Read on a thread of its own, a single-threaded
+//! documents, folders and web addresses it lists beside them), and every shortcut that menu's own folders hold
+//! beside that, by name and by what opens it, for quick launch's choosing (see `ui::beside`). Read on a thread of its own, a single-threaded
 //! apartment (the shell's folders expect one), when first asked and again each time after; searched by name and by
 //! the first letters of a Chinese name's pinyin.
 
@@ -88,14 +89,83 @@ fn read() -> Option<Vec<Found>> {
             if !crate::station::apps::is_program(&target) {
                 continue;
             }
+            // (And a program's door out is left out with them, however the shell came to list it: it opens nothing of its own.)
+            if crate::station::apps::is_uninstaller(&name, &target) {
+                continue;
+            }
             let initials = initials(&name);
             found.push(Found { name, target, initials });
         }
+        // (The shell's own list leaves programs out that the Start menu's folders still hold: their shortcuts too.)
+        in_the_folders(&mut found);
         // (By the first letter each is listed under, as the Start menu groups them, then by name.)
         found.sort_by(|a, b| (a.initials.first().map(|bits| bits.trailing_zeros()), &a.name).cmp(&(b.initials.first().map(|bits| bits.trailing_zeros()), &b.name)));
-        found.dedup_by(|a, b| a.target == b.target);
+        one_each(&mut found);
         Some(found)
     }
+}
+
+/// The Start menu's folders, this person's and every account's: the shortcuts they hold added to what the shell's Apps
+/// folder listed, which leaves out programs that these still show.
+fn in_the_folders(found: &mut Vec<Found>) {
+    let mut stack: Vec<std::path::PathBuf> = roots();
+    while let Some(folder) = stack.pop() {
+        // (What starts with Windows is not a program to be looked for here.)
+        if folder.file_name().is_some_and(|name| name.eq_ignore_ascii_case("Startup")) { continue; }
+        let Ok(listed) = std::fs::read_dir(&folder) else { continue };
+        for given in listed.flatten() {
+            let path = given.path();
+            if path.is_dir() { stack.push(path); continue; }
+            if !path.extension().is_some_and(|end| end.eq_ignore_ascii_case("lnk")) { continue; }
+            let Some(name) = path.file_stem().map(|one| one.to_string_lossy().into_owned()) else { continue };
+            if name.trim().is_empty() { continue; }
+            let target = path.to_string_lossy().into_owned();
+            if !crate::station::apps::is_program(&target) {
+                continue;
+            }
+            // (A shortcut whose whole meaning is to take a program off again is no program to be found by name.)
+            if crate::station::apps::is_uninstaller(&name, &target) {
+                continue;
+            }
+            found.push(Found { name: name.clone(), target, initials: initials(&name) });
+        }
+    }
+}
+
+/// Where the Start menu keeps its programs, as folders on disk (this person's and every account's).
+fn roots() -> Vec<std::path::PathBuf> {
+    use windows::Win32::UI::Shell::{FOLDERID_CommonStartMenu, FOLDERID_StartMenu, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    let mut roots = Vec::new();
+    for id in [&FOLDERID_StartMenu, &FOLDERID_CommonStartMenu] {
+        let path = unsafe {
+            let Ok(kept) = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) else { continue };
+            let found = kept.to_string().ok().map(std::path::PathBuf::from);
+            windows::Win32::System::Com::CoTaskMemFree(Some(kept.0 as *const _));
+            found
+        };
+        roots.extend(path);
+    }
+    roots
+}
+
+/// Of programs the same opens, one kept: the first as it lies, the rest gone (the shell's own entry for a program and
+/// a shortcut to it in one of the folders are one program, however each of the two is named). Where the shell's list
+/// and the folders name the same program differently, the shell's own entry is the one kept, as the folders are only
+/// read after it.
+fn one_each(found: &mut Vec<Found>) {
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|one| seen.insert(identity(&one.target)));
+    // (And of programs called the same, one kept: the Start menu shows a name once, however many shortcuts carry it,
+    // this person's folder and every account's holding the same program twice under one name now and then.)
+    let mut named = std::collections::HashSet::new();
+    found.retain(|one| named.insert(one.name.to_lowercase()));
+}
+
+/// What one program is known by, however the shell names it: the file it opens, which `apps::opens` already tells not
+/// apart by case, and what that is given.
+fn identity(target: &str) -> String {
+    let opened = crate::station::apps::opens(target);
+    format!("{}\u{1}{}", opened.path, opened.arguments)
 }
 
 /// The first letters of `name`'s words, each as the letters it may be (bits 0 to 25 'a' to 'z', 26 to 35 the digits):
@@ -165,5 +235,16 @@ mod tests {
             assert!(!matches(&found(name), query), "{name} not by {query}");
         }
         assert!(matches(&found("微信"), ""));
+    }
+
+    /// Two shortcuts to one program, or two of a same name, are one listing: told apart first by what each opens (the
+    /// paths of Windows not told apart by case), then by the name each is seen under, in any case.
+    #[test]
+    fn one_program_is_listed_once() {
+        let found = |name: &str, target: &str| Found { name: name.into(), target: target.into(), initials: Vec::new() };
+        let mut list = vec![found("Word", r"C:\One\Word.lnk"), found("Microsoft Word", r"C:\one\word.lnk"), found("word", r"C:\Two\Word.lnk"), found("记事本", r"C:\Three\note.lnk")];
+        one_each(&mut list);
+        let names: Vec<&str> = list.iter().map(|one| one.name.as_str()).collect();
+        assert_eq!(names, vec!["Word", "记事本"]);
     }
 }
