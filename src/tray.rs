@@ -309,6 +309,7 @@ const SETTINGS: usize = 2;
 const CHECK: usize = 3;
 const QUIT: usize = 4;
 const RECALL: usize = 5;
+const DOCK: usize = 6;
 
 /// The icon's menu, opening up from `(x, y)` on the screen as the taskbar's do, up (see `menu::Menu`), with what each
 /// of its choices is (see `chosen`). On the panel's thread.
@@ -318,16 +319,18 @@ pub fn open_menu(x: i32, y: i32, over_the_panel: bool) -> Option<(crate::ui::men
     use crate::ui::menu::{Item, Menu};
     let zh = crate::update::language() == crate::ui::text::Lang::Zh;
     let recall = crate::app().controller.widget_put_away();
+    let dock_on = dock_shown();
     // Each choice, its icon, and whether a rule sets it off; no widget to
     // bring back, no choice for it.
     let mut choices = vec![(OPEN, if zh { "打开面板" } else { "Open the panel" }, Icon::Panel, false)];
     if recall {
         choices.push((RECALL, if zh { "召回小组件" } else { "Bring the widget back" }, Icon::Restore, false));
     }
+    choices.push((DOCK, if zh { "显示 Dock" } else { "Show the dock" }, Icon::ArrowDownToLine, false));
     choices.push((SETTINGS, if zh { "设置" } else { "Settings" }, Icon::Settings, false));
     choices.push((CHECK, if zh { "检查更新" } else { "Check for updates" }, Icon::Update, false));
     choices.push((QUIT, if zh { "退出 Glance" } else { "Quit Glance" }, Icon::Quit, true));
-    let items: Vec<Item<'static>> = choices.iter().map(|(_, label, icon, rule_before)| Item { label, mark: Some(crate::ui::menu::Mark::Icon(*icon)), checked: false, rule_before: *rule_before }).collect();
+    let items: Vec<Item<'static>> = choices.iter().map(|(choice, label, icon, rule_before)| Item { label, mark: Some(crate::ui::menu::Mark::Icon(*icon)), checked: *choice == DOCK && dock_on, rule_before: *rule_before }).collect();
     MENU_UP.store(true, Ordering::Relaxed);
     show_tip(false);
     let Some(menu) = Menu::open_at(items, crate::ui::menu::Look::system(), POINT { x, y }, true, over_the_panel) else {
@@ -360,11 +363,21 @@ pub fn chosen(choice: Option<usize>, choices: &[usize]) {
     match choice.map_or(0, |i| choices[i]) {
         OPEN => crate::app().controller.open_from_tray(),
         RECALL => crate::app().controller.recall_widget(),
+        // Turned the other way from what it is now, read where it is kept.
+        DOCK => {
+            let on = !dock_shown();
+            std::thread::spawn(move || crate::app().set_dock(on));
+        }
         SETTINGS => crate::show_settings(icon_place()),
         CHECK => crate::update::check_now(crate::update::Asker::Tray),
         QUIT => crate::quit(),
         _ => {}
     }
+}
+
+/// Whether the dock is on, read where it is kept: for the tray's menu, which says what is on.
+fn dock_shown() -> bool {
+    crate::app().settings.lock().unwrap().dock.on
 }
 
 /// Sets the icon's tooltip, from any thread.

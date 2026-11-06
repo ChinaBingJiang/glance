@@ -130,6 +130,11 @@ impl FullMusic {
         })
     }
 
+    /// Its window, that the dock gives way to (see `crate::dock::Dock::show`).
+    pub fn hwnd(&self) -> HWND {
+        self.window.hwnd
+    }
+
     pub fn owns(&self, hwnd: HWND) -> bool {
         self.window.hwnd == hwnd
     }

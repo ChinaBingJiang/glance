@@ -222,6 +222,8 @@ struct Config {
     size: f32,
     sizes: PanelSizes,
     overlay: OverlaySettings,
+    /// The dock's own, kept here as the overlay's are (see `crate::dock`).
+    dock: crate::settings::DockSettings,
     panel_at: Option<PanelAt>,
     /// The panels pinned open at their edges (see `Settings::panels_pinned`).
     panels_pinned: Vec<((i32, i32), Option<Edge>)>,
@@ -255,6 +257,7 @@ fn config_from(settings: &Settings) -> Config {
         size: settings.panel_size,
         sizes: settings.part_sizes.clone(),
         overlay: settings.overlay.clone(),
+        dock: settings.dock.clone(),
         panel_at: settings.panel_at,
         panels_pinned: settings.panels_pinned.clone(),
         music_rooms: settings.music_rooms,
@@ -648,6 +651,38 @@ impl Controller {
             let beneath = panels.iter().find(|panel| panel.is_shown()).map(|panel| panel.window.hwnd);
             overlay.show(&history, &settings, panels[0].lang, playing, wanted, beneath);
         };
+        // The dock, made when first wanted, as the overlay is (and tried again at the next sample where there was no
+        // device just then).
+        let mut dock: Option<crate::dock::Dock> = None;
+        let draw_dock = |dock: &mut Option<crate::dock::Dock>, panels: &[Panel], widgets: &mut crate::widget::Widgets| {
+            if !self.config.lock().unwrap().dock.on {
+                if let Some(dock) = dock.as_mut() {
+                    dock.hide();
+                }
+                return;
+            }
+            if dock.is_none() {
+                *dock = crate::dock::Dock::new().ok();
+            }
+            let Some(dock) = dock.as_mut() else { return };
+            let settings = self.config.lock().unwrap().dock.clone();
+            // Which of Glance's own doors stand open, told by the dots under its tiles.
+            let lights = crate::dock::Lights {
+                // (Which component a panel up shows, rather than whether any panel is up: the two doors open the same
+                // window at the same edge, and only one of them is showing what the other's tile stands for.)
+                monitor: panels.iter().any(|panel| panel.is_shown() && panel.part == Part::Monitor),
+                workbench: panels.iter().any(|panel| panel.is_shown() && panel.part == Part::Workbench),
+                music: widgets.full().is_some(),
+                overlay: self.overlay_wanted(),
+            };
+            // (What plays over a whole screen is the one window the dock must not stand over: its glass across the
+            // smoke reads as a mask laid over the picture. The dock gives way to it as it does to an open panel, and
+            // the full screen is left to lay its controls along the screen's own foot.)
+            let beneath = widgets.full().map(|full| full.hwnd()).or_else(|| {
+                panels.iter().find(|panel| panel.is_shown()).map(|panel| panel.window.hwnd)
+            });
+            dock.show(&settings, panels[0].lang, lights, self.playing(), beneath);
+        };
         self.sink.store(sink.0 as isize, Ordering::Release);
         // (A link made or lost as this thread began had no one to tell yet.)
         own_input = hear_as_linked(sink, own_input);
@@ -732,9 +767,9 @@ impl Controller {
             }
             // A note's writing menu asked for on its words (see `Widgets::take_writing_menu_asked`).
             if widgets.writing_menu_was_asked() {
-                self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                 menu = widgets.take_writing_menu_asked(panels[0].lang, panels.iter().any(Panel::is_shown)).map(|(open, name, choices)| (open, MenuFor::Note(name, choices)));
-                keep_menu_above(&menu, &mut overlay);
+                keep_menu_above(&menu, &mut overlay, &mut dock);
             }
             if !got {
                 let now = Instant::now();
@@ -747,7 +782,7 @@ impl Controller {
                 // A menu left for another window come to the front, or for the panel come since it opened (by its
                 // shortcut, an edge).
                 if menu.as_ref().is_some_and(|(open, _)| open.left() || (panels.iter().any(Panel::is_shown) && !open.over_the_panel())) {
-                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                 }
                 // The picker of a to-do's time left as well.
                 if crate::ui::todo::pick::left() {
@@ -958,7 +993,7 @@ impl Controller {
                 match handled {
                     Handled::Done(choice) => {
                         closing_press.closed_by(msg.message);
-                        self.end_menu(&mut menu, choice, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                        self.end_menu(&mut menu, choice, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                         // (A shortcut, the panel's too, does what it is for as well; Esc only leaves the menu.)
                         let shortcut = matches!(msg.message, WM_HOTKEY | TOGGLE | OPEN_FROM_TRAY);
                         if !shortcut || (msg.hwnd.is_invalid() && msg.wParam.0 == ESCAPE_HOTKEY as usize) {
@@ -1184,9 +1219,9 @@ impl Controller {
                 }
                 TRAY_MENU => {
                     let (x, y) = ((msg.lParam.0 & 0xFFFF) as u16 as i16 as i32, ((msg.lParam.0 >> 16) & 0xFFFF) as u16 as i16 as i32);
-                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                     menu = crate::tray::open_menu(x, y, panels.iter().any(Panel::is_shown)).map(|(open, choices)| (open, MenuFor::Tray(choices)));
-                    keep_menu_above(&menu, &mut overlay);
+                    keep_menu_above(&menu, &mut overlay, &mut dock);
                 }
                 RECALL_WIDGET => {
                     widgets.recall();
@@ -1229,6 +1264,7 @@ impl Controller {
                         crate::ui::beside::follow_skin(panel.skin);
                     }
                     draw_overlay(&mut overlay, &panels);
+                    draw_dock(&mut dock, &panels, &mut widgets);
                     // An open settings window takes what was changed elsewhere.
                     settings_window::follow_settings();
                 }
@@ -1243,6 +1279,7 @@ impl Controller {
                         }
                     }
                     draw_overlay(&mut overlay, &panels);
+                    draw_dock(&mut dock, &panels, &mut widgets);
                 }
                 // The pinned panel dragged by its bar.
                 // (Pressed with the settings in front, it comes over them: in use, it was under them till a page it opened
@@ -1404,9 +1441,9 @@ impl Controller {
                 // menu's button (see `Widgets::write`).
                 WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE | WM_MOUSEWHEEL | windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONDOWN | WM_RBUTTONUP if widgets.owns(msg.hwnd) && widgets.write(&msg) => {
                     if let Some(number) = widgets.take_note_menu_asked() {
-                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                         menu = widgets.note_menu(msg.hwnd, number, panels[0].lang, panels.iter().any(Panel::is_shown)).map(|(open, name, choices)| (open, MenuFor::Note(name, choices)));
-                        keep_menu_above(&menu, &mut overlay);
+                        keep_menu_above(&menu, &mut overlay, &mut dock);
                     }
                 }
                 // The desktop widgets: pressed, let go (or found let go as the pointer moves: the button up unheard,
@@ -1416,9 +1453,9 @@ impl Controller {
                     widgets.release(msg.hwnd, now, false);
                     // A button of its station's head: its menu.
                     if let Some((hit, tab)) = widgets.take_menu_asked() {
-                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                         menu = cursor_position().and_then(|at| crate::station::head_menu(hit, tab, at, panels.iter().any(Panel::is_shown), widgets.look_of(msg.hwnd))).map(|(open, choices)| (open, MenuFor::StationHead(choices, Some(msg.hwnd))));
-                        keep_menu_above(&menu, &mut overlay);
+                        keep_menu_above(&menu, &mut overlay, &mut dock);
                     }
                 }
                 // Its capture taken (a UAC prompt, the lock screen, another program): no press completed, nothing
@@ -1427,7 +1464,7 @@ impl Controller {
                 WM_MOUSEMOVE if widgets.owns(msg.hwnd) && widgets.held(msg.hwnd) && let_go(&msg) => widgets.release(msg.hwnd, now, false),
                 WM_MOUSEMOVE if widgets.owns(msg.hwnd) => widgets.hover(msg.hwnd, lparam_point(msg.lParam), panels[0].lang),
                 WM_RBUTTONUP if widgets.owns(msg.hwnd) => {
-                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                     // On a thing on the station, its menu; else the widget's.
                     let panel_shown = panels.iter().any(Panel::is_shown);
                     let hit = widgets.hit_at(msg.hwnd, lparam_point(msg.lParam));
@@ -1442,7 +1479,7 @@ impl Controller {
                         Some(Hit::Note(number) | Hit::Words(number)) => widgets.note_menu(msg.hwnd, number, panels[0].lang, panel_shown).map(|(open, name, choices)| (open, MenuFor::Note(name, choices))).or_else(|| widgets.menu(msg.hwnd, panels[0].lang, panel_shown).map(|open| (open, MenuFor::Widget(msg.hwnd)))),
                         _ => widgets.menu(msg.hwnd, panels[0].lang, panel_shown).map(|open| (open, MenuFor::Widget(msg.hwnd))),
                     };
-                    keep_menu_above(&menu, &mut overlay);
+                    keep_menu_above(&menu, &mut overlay, &mut dock);
                 }
                 // On a thing on the station in the panel, its menu.
                 WM_RBUTTONUP if owner.is_some() => {
@@ -1450,7 +1487,7 @@ impl Controller {
                     let look = panels[owner.unwrap()].menu_look();
                     if matches!(hit, Some(Hit::Shelf(_) | Hit::Copied(_) | Hit::App(_) | Hit::Recent(_) | Hit::Note(_))) {
                         // (Before `end_menu`, which forgets whose the menu up was.)
-                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                        self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                         menu_of = owner;
                     }
                     let panel = &panels[owner.unwrap()];
@@ -1463,20 +1500,20 @@ impl Controller {
                         }
                         Some(Hit::Shelf(id) | Hit::Copied(id)) => {
                             menu = cursor_position().and_then(|at| crate::station::menu(id, at, true, look)).map(|(open, choices)| (open, MenuFor::Station(id, choices, None)));
-                            keep_menu_above(&menu, &mut overlay);
+                            keep_menu_above(&menu, &mut overlay, &mut dock);
                         }
                         Some(Hit::App(at)) => {
                             menu = cursor_position().and_then(|point| crate::station::app_menu(at, point, true, look)).map(|(open, choices, app)| (open, MenuFor::App(app, choices)));
-                            keep_menu_above(&menu, &mut overlay);
+                            keep_menu_above(&menu, &mut overlay, &mut dock);
                         }
                         Some(Hit::Recent(file)) => {
                             menu = cursor_position().and_then(|at| crate::station::recent_menu(file, at, true, look)).map(|(open, choices)| (open, MenuFor::Recent(file, choices)));
-                            keep_menu_above(&menu, &mut overlay);
+                            keep_menu_above(&menu, &mut overlay, &mut dock);
                         }
                         // A note's card: the note's menu, as its card on the desktop has it.
                         Some(Hit::Note(number)) => {
                             menu = widgets.menu_of_note(number, None, panels[0].lang, look, true).map(|(open, name, choices)| (open, MenuFor::Note(name, choices)));
-                            keep_menu_above(&menu, &mut overlay);
+                            keep_menu_above(&menu, &mut overlay, &mut dock);
                         }
                         _ => {}
                     }
@@ -1566,10 +1603,10 @@ impl Controller {
                     let at = owner.unwrap();
                     let hit = panels[at].hit_at(lparam_point(msg.lParam)).unwrap();
                     panels[at].click(lparam_point(msg.lParam));
-                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                     menu = cursor_position().and_then(|point| crate::station::head_menu(hit, panels[at].tab, point, true, panels[at].menu_look())).map(|(open, choices)| (open, MenuFor::StationHead(choices, None)));
                     menu_of = Some(at);
-                    keep_menu_above(&menu, &mut overlay);
+                    keep_menu_above(&menu, &mut overlay, &mut dock);
                 }
                 WM_LBUTTONUP if owner.is_some() => {
                     let panel = &mut panels[owner.unwrap()];
@@ -1602,9 +1639,9 @@ impl Controller {
                 WM_MOUSEMOVE if overlay.as_ref().is_some_and(|o| o.owns_bar(msg.hwnd)) => overlay.as_mut().unwrap().bar_hover(),
                 // Its menu, or one of its buttons: the same is done (see `overlay_chosen`).
                 WM_RBUTTONUP if overlay.as_ref().is_some_and(|o| msg.hwnd == o.window.hwnd) => {
-                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay);
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
                     menu = overlay.as_ref().unwrap().menu(panels.iter().any(Panel::is_shown)).map(|open| (open, MenuFor::Overlay));
-                    keep_menu_above(&menu, &mut overlay);
+                    keep_menu_above(&menu, &mut overlay, &mut dock);
                 }
                 WM_LBUTTONUP if overlay.as_ref().is_some_and(|o| o.owns_bar(msg.hwnd)) => {
                     if let Some((choice, place)) = overlay.as_mut().unwrap().bar_press() {
@@ -1617,6 +1654,53 @@ impl Controller {
                 WM_MOUSEWHEEL if overlay.as_ref().is_some_and(|o| msg.hwnd == o.window.hwnd) => {
                     let notches = (msg.wParam.0 >> 16) as u16 as i16 as f32 / 120.0;
                     std::thread::spawn(move || crate::app().clear_overlay(notches * 0.05));
+                }
+                // The dock: pressed, dragged along its edge, let go; its menu; and the wheel over it, its glass
+                // clearer (up) or less clear, as the overlay's.
+                WM_LBUTTONDOWN if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) => dock.as_mut().unwrap().press(),
+                // Let go: the button up, or the pointer moved with the button no longer down (past the glass, where
+                // the capture keeps it).
+                WM_LBUTTONUP | WM_MOUSEMOVE if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd && d.in_hand())
+                    && (msg.message != WM_MOUSEMOVE || let_go(&msg)) =>
+                {
+                    let crate::dock::Let { placed, act, items } = dock.as_mut().unwrap().release();
+                    // (The row was rearranged: its order written back as the settings' own, on another thread, and
+                    // the dock drawn again as the change pours back through it.)
+                    if let Some(items) = items {
+                        std::thread::spawn(move || crate::app().change_dock(|dock| dock.items = items));
+                    }
+                    if let Some(placed) = placed {
+                        std::thread::spawn(move || crate::app().place_dock(placed));
+                    }
+                    if let Some(act) = act {
+                        self.dock_act(act, &mut panels, &mut widgets);
+                    }
+                }
+                // The capture taken from it by something else (a UAC prompt, the lock screen): nothing was done.
+                crate::ui::window::CAPTURE_LOST if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) => {
+                    dock.as_mut().unwrap().lost()
+                }
+                WM_MOUSEMOVE if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) => dock.as_mut().unwrap().moved(),
+                // Every frame of what is easing, and its own slow watch: the pointer, what runs, what is behind it.
+                WM_TIMER if msg.wParam.0 == crate::dock::TICK_TIMER
+                    && dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) =>
+                {
+                    dock.as_mut().unwrap().step()
+                }
+                WM_TIMER if msg.wParam.0 == crate::dock::PEEK_TIMER
+                    && dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) =>
+                {
+                    dock.as_mut().unwrap().peek()
+                }
+                WM_RBUTTONUP if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) => {
+                    self.end_menu(&mut menu, None, &mut panels, &mut menu_of, &mut widgets, &mut overlay, &mut dock);
+                    let at = cursor_position().unwrap_or_default();
+                    menu = dock.as_ref().and_then(|d| d.menu(at, panels.iter().any(Panel::is_shown))).map(|(open, choices)| (open, MenuFor::Dock(choices)));
+                    keep_menu_above(&menu, &mut overlay, &mut dock);
+                }
+                WM_MOUSEWHEEL if dock.as_ref().is_some_and(|d| msg.hwnd == d.window.hwnd) => {
+                    let notches = (msg.wParam.0 >> 16) as u16 as i16 as f32 / 120.0;
+                    std::thread::spawn(move || crate::app().clear_dock(notches * 0.05));
                 }
                 WM_MOUSEWHEEL if widgets.owns(msg.hwnd) => widgets.wheel(msg.hwnd, lparam_point(msg.lParam), (msg.wParam.0 >> 16) as u16 as i16, false),
                 WM_MOUSEHWHEEL if widgets.owns(msg.hwnd) => widgets.wheel(msg.hwnd, lparam_point(msg.lParam), (msg.wParam.0 >> 16) as u16 as i16, true),
@@ -1839,10 +1923,13 @@ fn end_pick(asked: bool, panels: &mut [Panel], widgets: &mut crate::widget::Widg
     widgets.draw_soon();
 }
 
-/// The overlay kept under `menu`, while one is up (see `Overlay::under_menu`).
-fn keep_menu_above(menu: &Option<(crate::ui::menu::Menu, MenuFor)>, overlay: &mut Option<Overlay>) {
+/// The overlay and the dock kept under `menu`, while one is up (see `Overlay::under_menu`, `crate::dock::Dock::under_menu`).
+fn keep_menu_above(menu: &Option<(crate::ui::menu::Menu, MenuFor)>, overlay: &mut Option<Overlay>, dock: &mut Option<crate::dock::Dock>) {
     if let (Some((open, _)), Some(overlay)) = (menu.as_ref(), overlay.as_mut()) {
         overlay.under_menu(Some(open.hwnd()));
+    }
+    if let (Some((open, _)), Some(dock)) = (menu.as_ref(), dock.as_mut()) {
+        dock.under_menu(Some(open.hwnd()));
     }
 }
 
@@ -1862,6 +1949,8 @@ enum MenuFor {
     Recent(crate::station::recent::Entry, Vec<crate::station::RecentChoice>),
     /// A thing kept at hand, as its menu was opened on it, and what each row does (see `station::app_menu`).
     App(crate::station::apps::App, Vec<crate::station::AppChoice>),
+    /// The dock's own, or one of its tiles', with what each row does (see `crate::dock::Dock::menu`).
+    Dock(Vec<crate::dock::Choice>),
     /// A note stuck on the desktop, by its name, and what each row does (see `Widgets::note_menu`).
     Note(String, Vec<crate::ui::note::Choice>),
     /// Things on a station's lane chosen together, and what each row does (see `station::many_menu`).
@@ -1902,7 +1991,7 @@ impl Controller {
     }
 
     /// The menu up, if one is, gone, `choice` chosen in it (the index of one, or none, left): done.
-    fn end_menu(&self, menu: &mut Option<(crate::ui::menu::Menu, MenuFor)>, choice: Option<usize>, panels: &mut [Panel], menu_of: &mut Option<usize>, widgets: &mut crate::widget::Widgets, overlay: &mut Option<Overlay>) {
+    fn end_menu(&self, menu: &mut Option<(crate::ui::menu::Menu, MenuFor)>, choice: Option<usize>, panels: &mut [Panel], menu_of: &mut Option<usize>, widgets: &mut crate::widget::Widgets, overlay: &mut Option<Overlay>, dock: &mut Option<crate::dock::Dock>) {
         let Some((open, of)) = menu.take() else { return };
         let menu_panel = menu_of.take();
         // (Where the choice was on the screen: what it opens comes out of there, but for the tray icon's menu.)
@@ -1910,6 +1999,9 @@ impl Controller {
         open.close();
         if let Some(overlay) = overlay.as_mut() {
             overlay.under_menu(None);
+        }
+        if let Some(dock) = dock.as_mut() {
+            dock.under_menu(None);
         }
         // The pointer, where the menu left it (past the panel's edge, as a menu longer than it reaches), taken to
         // have not yet come onto the panel: it stays till the pointer comes and goes again, or a press elsewhere, as
@@ -1927,6 +2019,11 @@ impl Controller {
             MenuFor::Overlay => {
                 if let (Some(row), Some(overlay)) = (choice, overlay.as_ref()) {
                     self.overlay_chosen(overlay.chose(row), place, panels);
+                }
+            }
+            MenuFor::Dock(choices) => {
+                if let Some(row) = choice.and_then(|row| choices.get(row).cloned()) {
+                    self.dock_chosen(row, place, panels, widgets);
                 }
             }
             MenuFor::Station(id, choices, on) => match (choice.and_then(|row| choices.get(row)), on) {
@@ -1988,6 +2085,173 @@ impl Controller {
                 None => {}
             },
         }
+    }
+
+    /// What was chosen in the dock's menu, or on one of its tiles, or asked of the wheel over it (at `place` on the
+    /// screen, for what comes out of there): done. A setting is changed on another thread, as with every other menu
+    /// (see `overlay_chosen`), so that the disk is not waited on here.
+    fn dock_chosen(&self, row: crate::dock::Choice, place: Option<RECT>, panels: &mut [Panel], widgets: &mut crate::widget::Widgets) {
+        use crate::dock::Choice as C;
+        use crate::settings::DockItem;
+        match row {
+            C::Lock(locked) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.locked = locked));
+            }
+            C::Through(through) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.click_through = through));
+            }
+            C::Hide(hide) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.auto_hide = hide));
+            }
+            C::Magnify(magnify) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.magnify = magnify));
+            }
+            C::Dots(dots) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.running = dots));
+            }
+            C::ShowOpen(open) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.show_open = open));
+            }
+            C::Edge(edge) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| dock.edge = edge));
+            }
+            C::Divider => {
+                std::thread::spawn(|| crate::app().change_dock(|dock| dock.items.push(DockItem::Gap)));
+            }
+            C::Remove(item) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| {
+                    if let Some(at) = dock.items.iter().position(|one| *one == item) {
+                        dock.items.remove(at);
+                    }
+                }));
+            }
+            // (A window's program kept: it stands on the row after the window is closed.)
+            C::Add(item) => {
+                std::thread::spawn(move || crate::app().change_dock(move |dock| {
+                    if !dock.items.iter().any(|one| *one == item) {
+                        // (At the left end, where what is pinned new goes.)
+                        dock.items.insert(0, item);
+                    }
+                }));
+            }
+            C::Admin(target) => crate::station::run::ask(crate::station::run::Ask::LaunchAs(target)),
+            C::Act(act) => self.dock_act(act, panels, widgets),
+            C::Where(target) => {
+                let here = crate::station::apps::App { target, name: String::new() }.location();
+                if let Some(path) = here {
+                    crate::station::run::ask(crate::station::run::Ask::Files(vec![path], crate::station::run::FilesAct::Show));
+                }
+            }
+            C::Settings => {
+                for panel in panels.iter_mut().filter(|panel| !panel.stays()) {
+                    panel.dismiss();
+                }
+                crate::show_settings(place);
+            }
+            C::Close => {
+                std::thread::spawn(move || crate::app().set_dock(false));
+            }
+        }
+    }
+
+    /// What one of the dock's tiles asks for: a thing opened by the shell, a window gone to, one of Glance's own
+    /// doors, or the Recycle Bin.
+    fn dock_act(&self, act: crate::ui::dock::Act, panels: &mut [Panel], widgets: &mut crate::widget::Widgets) {
+        use crate::settings::DockDoor as Door;
+        use crate::ui::dock::Act as A;
+        match act {
+            A::Gap => {}
+            // A tile of a program already running goes to its window rather than opening another copy of it — what
+            // the taskbar's button does, and what the tile's own menu offers while the running apps are followed (see
+            // `crate::dock_running`).
+            A::Launch(target) => {
+                let follow = self.config.lock().unwrap().dock.running;
+                let found = follow.then(|| crate::dock_running::for_target(&target)).flatten();
+                match found {
+                    Some(found) => crate::dock_running::go_to(&found),
+                    None => crate::station::run::ask(crate::station::run::Ask::Launch(target)),
+                }
+            }
+            // The Recycle Bin, as Explorer opens it.
+            A::Trash => crate::station::run::ask(crate::station::run::Ask::Launch(
+                "shell:::{645ff040-5081-436d-b9fc-d1e49d524059}".to_string(),
+            )),
+            A::GoTo(path) => {
+                if let Some(found) = crate::dock_running::window_of(&path) {
+                    crate::dock_running::go_to(&found);
+                }
+            }
+            A::Door(door) => match door {
+                Door::Monitor | Door::Workbench => {
+                    // The panel up already showing it follows its tile; else the panel up, or the first one free, is
+                    // turned to it — the two doors open the same window, and the edge it came from says what it shows.
+                    let part = if door == Door::Workbench { Part::Workbench } else { Part::Monitor };
+                    let now = Instant::now();
+                    match panels.iter().position(|panel| panel.is_shown() && panel.part == part) {
+                        Some(was) => {
+                            if part == Part::Workbench {
+                                panels[was].tab = view::Tab::Shelf;
+                            }
+                            panels[was].next_frame = now;
+                        }
+                        None => {
+                            let at = panels.iter().position(Panel::is_shown).unwrap_or(0);
+                            if !panels[at].is_shown() {
+                                // (The door opens at the edge that holds it — Monitor at the right, Workbench at the
+                                // left, as the places say — rather than at the pointer's nearest edge, which by a dock
+                                // along the foot would bring every door out at the bottom.)
+                                match self.edge_for_part(part) {
+                                    Some((point, contact, edge)) => panels[at].open(point, contact, edge, None, false, now),
+                                    None => self.open_by_hand(&mut panels[at], None, now),
+                                }
+                            }
+                            // (The door says what the window is to show: taken up after the opening, which sets it
+                            // from the edge — the same again where the edge held nothing and it fell back to by hand.)
+                            panels[at].part = part;
+                            panels[at].restyle();
+                            if part == Part::Workbench {
+                                panels[at].tab = view::Tab::Shelf;
+                            }
+                            panels[at].next_frame = now;
+                        }
+                    }
+                    // (Its own dot under the tile, and the other door's, drawn again for it.)
+                    self.post(OVERLAY);
+                }
+                Door::Music => {
+                    if widgets.full().is_some() {
+                        widgets.leave_full();
+                    } else if let Some(contact) = cursor_position().and_then(monitor_at) {
+                        widgets.open_full(contact.monitor, contact.scale);
+                    }
+                    // (Its own dot under the tile drawn again for it, and the screen of what plays told where the dock
+                    // stands, which only the dock knows.)
+                    self.post(OVERLAY);
+                }
+                Door::Overlay => {
+                    let on = !self.overlay_wanted();
+                    self.set_overlay(on);
+                }
+                // The gear of the dock opens Glance's own settings window.
+                Door::Settings => crate::show_settings(None),
+            },
+        }
+    }
+
+    /// Where a door's own panel opens: the pointer's screen, at the edge that holds `part` there — none where the
+    /// pointer is off every screen, the panel is set to float, or no edge of that screen holds `part` (then the door
+    /// opens by hand, at the pointer's nearest edge, as it did).
+    fn edge_for_part(&self, part: Part) -> Option<(POINT, Contact, Edge)> {
+        if self.config.lock().unwrap().panel_at.is_some() {
+            return None;
+        }
+        let point = cursor_position()?;
+        let contact = monitor_at(point)?;
+        let edge = {
+            let config = self.config.lock().unwrap();
+            crate::screens::id_of(contact.monitor).and_then(|id| config.edges.places.edge(&id, part))
+        };
+        edge.map(|edge| (point, contact, edge))
     }
 
     /// What was chosen of the overlay, in its menu or by one of its buttons (at `place` on the screen): done.

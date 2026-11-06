@@ -253,6 +253,12 @@ impl Places {
         self.holds(screen).iter().find(|hold| hold.edge == edge).map(|hold| hold.part)
     }
 
+    /// Which `edge` of the screen named `screen` opens `part` (none where no edge there holds it): the reverse of
+    /// `part`, so a door knows the edge to come out at.
+    pub fn edge(&self, screen: &str, part: Part) -> Option<Edge> {
+        self.holds(screen).iter().find(|hold| hold.part == part).map(|hold| hold.edge)
+    }
+
     /// The edges of the screen named `screen` that open a panel.
     pub fn lit(&self, screen: &str) -> Lit {
         Lit::of(&EDGES.into_iter().filter(|edge| self.part(screen, *edge).is_some()).collect::<Vec<_>>())
@@ -709,6 +715,138 @@ impl PanelSizes {
     }
 }
 
+/// Which end of its screen the dock stands at.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockEdge {
+    /// Along the bottom, over the taskbar's own edge.
+    #[default]
+    Bottom,
+    /// Along the top, under what is there already.
+    Top,
+}
+
+/// What one tile of the dock is, and opens.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum DockItem {
+    /// A program, file, folder or address kept at hand, opened by the shell (see `station::apps::App`).
+    Keep { target: String, name: String },
+    /// One of Glance's own doors.
+    Door { door: DockDoor },
+    /// The Recycle Bin.
+    Trash,
+    /// A gap between tiles.
+    Gap,
+}
+
+/// A door of Glance's own, on the dock.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockDoor {
+    /// The panel, at its edge.
+    Monitor,
+    /// The workbench, where the notes are too.
+    Workbench,
+    /// What plays.
+    Music,
+    /// The overlay.
+    Overlay,
+    /// The settings.
+    Settings,
+}
+
+/// The tiles a dock with none chosen shows.
+pub fn default_dock_items() -> Vec<DockItem> {
+    use {DockDoor as D, DockItem as I};
+    vec![
+        I::Door { door: D::Monitor },
+        I::Door { door: D::Workbench },
+        I::Door { door: D::Music },
+        I::Gap,
+        I::Trash,
+        I::Door { door: D::Settings },
+    ]
+}
+
+/// A row of tiles along the foot of the screen (or its top), each opening a thing kept at hand, Glance's own doors and
+/// the Recycle Bin, and telling which of them is running.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockSettings {
+    /// Whether it shows at all.
+    pub on: bool,
+    /// Which end of its screen it stands at.
+    pub edge: DockEdge,
+    /// How far along that edge it stands: 0 at the left, 1 at the right, as a drag left it.
+    pub along: f32,
+    /// A point on the screen it stands on (physical pixels); none, the screen the pointer is on.
+    pub screen: Option<(i32, i32)>,
+    /// A tile's side, DIPs, as designed.
+    pub size: f32,
+    /// The room between tiles, DIPs.
+    pub spacing: f32,
+    /// How far the tile under the pointer swells, as itself (1: not at all).
+    pub peak: f32,
+    /// Whether the pointer swells the tiles it passes.
+    pub magnify: bool,
+    /// How large the whole dock is drawn, 1 as designed (the panel's range).
+    pub scale: f32,
+    /// Gone till the pointer goes to the edge it stands at.
+    pub auto_hide: bool,
+    /// Locked where it stands: not dragged off it.
+    pub locked: bool,
+    /// Clicks pass through it.
+    pub click_through: bool,
+    /// How clear its glass is: 0, all there; 1, gone (the tiles alone over what is behind).
+    pub clear: f32,
+    /// A dot under the tile of what is running.
+    pub running: bool,
+    /// Windows open but kept nowhere on the dock shown among its tiles too.
+    pub show_open: bool,
+    /// The tiles, in their order.
+    pub items: Vec<DockItem>,
+}
+
+impl Default for DockSettings {
+    fn default() -> Self {
+        DockSettings {
+            on: false,
+            edge: DockEdge::Bottom,
+            along: 0.5,
+            screen: None,
+            size: 46.0,
+            spacing: 8.0,
+            peak: 1.5,
+            magnify: true,
+            scale: 1.0,
+            auto_hide: false,
+            locked: false,
+            click_through: false,
+            clear: 0.0,
+            running: true,
+            show_open: true,
+            items: default_dock_items(),
+        }
+    }
+}
+
+impl DockSettings {
+    /// How far the tile under the pointer swells: as set, but none where the pointer swells nothing.
+    pub fn peak(&self) -> f32 {
+        if self.magnify {
+            self.peak.clamp(1.0, 2.2)
+        } else {
+            1.0
+        }
+    }
+
+    /// A tile's side and the room between them, DIPs, clamped to what the dock can draw.
+    pub fn measures(&self) -> (f32, f32) {
+        (self.size.clamp(24.0, 96.0), self.spacing.clamp(0.0, 40.0))
+    }
+}
+
 /// Everything the backend acts on, plus the page's own preferences, which it
 /// stores without looking inside.
 #[derive(Clone, Serialize, Deserialize)]
@@ -804,6 +942,8 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_read: Vec<String>,
     pub overlay: OverlaySettings,
+    /// See `DockSettings`; off until it is asked to stand.
+    pub dock: DockSettings,
     /// See `PanelAt`; none while the panel opens from the edge.
     pub panel_at: Option<PanelAt>,
     /// Pinned open at its edge, along it where this point is (physical px;
@@ -992,6 +1132,7 @@ impl Default for Settings {
             notices_told: Vec::new(),
             notices_read: Vec::new(),
             overlay: OverlaySettings::default(),
+            dock: DockSettings::default(),
             panel_at: None,
             panel_pinned: None,
             panel_pinned_edge: None,
