@@ -33,12 +33,14 @@ struct Key {
 
 /// How a picture is made: as Explorer shows the file (its thumbnail, else its icon), of its own shape, as large as
 /// fits the square; its icon alone, as Explorer shows a file of its kind (not what it holds), in the square; its
-/// thumbnail alone (none where it has none, not its icon), as `Fit`.
+/// thumbnail alone (none where it has none, not its icon), as `Fit`; its icon set on a plate of its own colours
+/// where it is a thin glyph (a whole tile's picture, a modern app's, left as it is — see `on_plate`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Made {
     Fit,
     Icon,
     Thumbnail,
+    Plate,
 }
 
 /// The most pictures kept (those asked for longest ago go first: never one drawn now, as a list turned through many
@@ -217,6 +219,21 @@ pub fn of(path: &Path, side: u32) -> Option<Picture> {
 /// file of a kind one opens, the folder's), as Explorer shows it.
 pub fn icon(path: &Path, side: u32) -> Option<Picture> {
     asked(path, side, Made::Icon)
+}
+
+/// How much of the square a picture must fill to stand as a tile of its own, needing no plate: a modern app's icon
+/// is a coloured square already, and a plate behind it would only crowd its picture.
+const WHOLE: f32 = 0.72;
+/// How large an icon's glyph keeps on its plate, as the plate's own side.
+const GLYPH: f32 = 0.66;
+/// How far a plate's corners are rounded, as its side: the same a tile is rounded to as it is drawn (see
+/// `crate::ui::launchpad::CORNER`).
+const ROUND: f32 = 0.225;
+
+/// The icon of the file at `path`, a thin glyph set on a plate of its own colours as on a Mac's launchpad (a picture
+/// that is already a whole tile left as it is), `side` physical px square: none yet (asked for), none to be had.
+pub fn plated(path: &Path, side: u32) -> Option<Picture> {
+    asked(path, side, Made::Plate)
 }
 
 fn asked(path: &Path, side: u32, made: Made) -> Option<Picture> {
@@ -431,12 +448,119 @@ fn squared(thumb: &Thumb, side: u32, key: u64) -> Picture {
     Picture { key, size: (side, side), pixels: Arc::new(pixels) }
 }
 
+/// `made` (the icon of a program, squared as drawn) set on a plate of its own colours, as on a Mac's launchpad: where
+/// its border is drawn near and dear — a modern app's icon, a coloured tile of itself — it is left exactly as it was;
+/// where it is a thin glyph in clear room, the glyph is drawn back `GLYPH` of the side on a rounded plate tinted from
+/// the glyph's own colours, lighter at its top than at its bottom, with a hairline of light within its top edge and a
+/// shade along its bottom. Its corners are rounded as a tile's are as it is drawn (see `crate::ui::launchpad::CORNER`),
+/// so the plate shows as a tile among them.
+fn on_plate(made: Picture, number: u64) -> Picture {
+    let side = made.size.0 as usize;
+    let Some(side) = (side >= 8).then_some(side) else {
+        return made;
+    };
+    let at = |x: usize, y: usize| {
+        let from = (y * side + x) * 4;
+        [made.pixels[from] as f32, made.pixels[from + 1] as f32, made.pixels[from + 2] as f32, made.pixels[from + 3] as f32]
+    };
+    // (How much of the square the picture fills, and the colour of what it does fill: its pixels are premultiplied
+    // BGRA, so each colour is taken back to what it is under its alpha before it is weighed in.)
+    let (mut red, mut green, mut blue, mut weighed, mut drawn) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0usize);
+    for y in 0..side {
+        for x in 0..side {
+            let (b, g, r, a) = (at(x, y)[0], at(x, y)[1], at(x, y)[2], at(x, y)[3]);
+            if a > 128.0 {
+                drawn += 1;
+                red += r * 255.0 / a;
+                green += g * 255.0 / a;
+                blue += b * 255.0 / a;
+                weighed += 1.0;
+            }
+        }
+    }
+    if weighed == 0.0 || drawn as f32 / (side * side) as f32 > WHOLE {
+        // (A tile of its own, drawn near and dear across the square: a plate behind it would only crowd the picture
+        // the shell made, whose corners are rounded as it is drawn.)
+        return made;
+    }
+    let (red, green, blue) = ((red / weighed).clamp(0.0, 255.0) / 255.0, (green / weighed).clamp(0.0, 255.0) / 255.0, (blue / weighed).clamp(0.0, 255.0) / 255.0);
+    // (The plate's colour: the glyph's, laid off towards grey and lifted towards a middle brightness — where the
+    // glyph is near white, hardly a tint at all; where near black, a dark one.)
+    let light = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    let (mut pr, mut pg, mut pb) = (red + (light - red) * 0.55, green + (light - green) * 0.55, blue + (light - blue) * 0.55);
+    let lift = 0.62 - (0.2126 * pr + 0.7152 * pg + 0.0722 * pb);
+    for c in [&mut pr, &mut pg, &mut pb] {
+        *c = (*c + lift).clamp(0.08, 0.94);
+    }
+    let (radius, ring) = (side as f32 * ROUND, (side as f32 / 64.0).max(1.0));
+    let (left, glyph) = (side as f32 * (1.0 - GLYPH) / 2.0, GLYPH);
+    let k = 1.0 / glyph;
+    let over = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let whole = |one: f32| one.clamp(0.0, 1.0);
+    let mix = |a: [f32; 4], b: [f32; 4], t: f32| [over(a[0], b[0], t), over(a[1], b[1], t), over(a[2], b[2], t), over(a[3], b[3], t)];
+    // (How far a point stands outside the plate's rounded square: within it negative, without positive — the plate
+    // itself, the light within its top edge, and the shade along its bottom all read off this one distance.)
+    let reach = |x: f32, y: f32| {
+        let (cx, cy) = (radius.max(x.min(side as f32 - radius)), radius.max(y.min(side as f32 - radius)));
+        (x - cx).hypot(y - cy) - radius
+    };
+    let mut pixels = vec![0u8; side * side * 4];
+    for y in 0..side {
+        // (The plate's colour between its top's and its bottom's, in the order it is drawn in: BGRA.)
+        let tone = y as f32 / (side - 1) as f32;
+        let shade = over(1.10, 0.84, tone).min(1.0);
+        let (cb, cg, cr) = (pb * shade * 255.0, pg * shade * 255.0, pr * shade * 255.0);
+        for x in 0..side {
+            let d = reach(x as f32 + 0.5, y as f32 + 0.5);
+            // (Its corner: whole within, cut with a soft edge a pixel and a half wide, clear beyond.)
+            let mask = whole(0.5 - d * 0.75);
+            if mask <= 0.0 {
+                continue;
+            }
+            // (A hairline of light within its top edge, and a shade along its bottom — the plate a tile among tiles,
+            // with the light falling on it from before.)
+            let lit = whole(1.0 - (d + ring).abs() / ring);
+            let glint = lit * whole(y as f32 / (side as f32 * 0.6)) * 0.30;
+            let dark = lit * whole((y as f32 - side as f32 * 0.55) / (side as f32 * 0.4)) * 0.18;
+            let (mut cb, mut cg, mut cr) = (cb, cg, cr);
+            for c in [&mut cb, &mut cg, &mut cr] {
+                *c = over(over(*c, 250.0, glint), 0.0, dark);
+            }
+            // (The glyph between the plate and the light: premultiplied, as every picture's pixels are, and drawn
+            // back bilinear from the region of the tile it keeps to itself.)
+            let (sx, sy) = ((x as f32 - left) * k, (y as f32 - left) * k);
+            let four = || {
+                if sx < 0.0 || sy < 0.0 || sx > (side - 1) as f32 || sy > (side - 1) as f32 {
+                    return [0.0f32; 4];
+                }
+                let (x0, y0) = (sx as usize, sy as usize);
+                let (x1, y1) = ((x0 + 1).min(side - 1), (y0 + 1).min(side - 1));
+                let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
+                mix(mix(at(x0, y0), at(x1, y0), fx), mix(at(x0, y1), at(x1, y1), fx), fy)
+            };
+            let g4 = four();
+            let (ga, one) = (g4[3] / 255.0, 1.0 - g4[3] / 255.0);
+            let a = mask + ga * (1.0 - mask);
+            let (mut b, mut g, mut r) = (g4[0] + cb * mask * one, g4[1] + cg * mask * one, g4[2] + cr * mask * one);
+            for c in [&mut b, &mut g, &mut r] {
+                *c = c.min(255.0 * a);
+            }
+            let to = (y * side + x) * 4;
+            for value in [b, g, r, a * 255.0].into_iter().zip(&mut pixels[to..to + 4]) {
+                *value.1 = value.0.clamp(0.0, 255.0).round() as u8;
+            }
+        }
+    }
+    Picture { key: number, size: (side as u32, side as u32), pixels: Arc::new(pixels) }
+}
+
 /// `thumb` as a picture known by `key`, made `made` for a square `side` across: of its own shape (see `shaped`), or in
 /// the square (`squared`).
 fn framed(thumb: &Thumb, side: u32, made: Made, key: u64) -> Picture {
     match made {
         Made::Fit | Made::Thumbnail => shaped(thumb, side, key),
         Made::Icon => squared(thumb, side, key),
+        Made::Plate => on_plate(squared(thumb, side, key), key),
     }
 }
 
@@ -471,7 +595,7 @@ fn picture(path: &Path, side: u32, made: Made) -> Result<Thumb, String> {
         let side = side.max(16) as i32;
         let how = match made {
             Made::Fit => SIIGBF_RESIZETOFIT,
-            Made::Icon => SIIGBF_ICONONLY,
+            Made::Icon | Made::Plate => SIIGBF_ICONONLY,
             Made::Thumbnail => SIIGBF_RESIZETOFIT | windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
         } | SIIGBF_BIGGERSIZEOK;
         let bitmap = factory.GetImage(SIZE { cx: side, cy: side }, how).map_err(|error| format!("the shell gave no picture: {error}"))?;
@@ -624,6 +748,42 @@ mod made {
         assert_eq!(at(10, 64), [0, 0, 255, 255]);
         assert_eq!(at(120, 64), [255, 0, 0, 255]);
     }
+
+    /// A thin glyph in clear room is set on a plate of its own: the plate drawn where the tile's corners are not,
+    /// its colour the glyph's laid off and lifted, the glyph kept whole in its middle.
+    #[test]
+    fn a_glyph_stands_on_a_plate() {
+        // A blue cross drawn in a 128² of clear room: its border all clear, so a plate is asked for.
+        let pixels = (0..128u32).flat_map(|y| (0..128u32).flat_map(move |x| if (56..72).contains(&x) && (40..88).contains(&y) || (52..76).contains(&y) && (40..88).contains(&x) { [230, 40, 20, 255] } else { [0, 0, 0, 0] })).collect();
+        let plate = on_plate(Picture { key: 7, size: (128, 128), pixels: Arc::new(pixels) }, 9);
+        let at = |x: u32, y: u32| &plate.pixels[((y * 128 + x) * 4) as usize..((y * 128 + x) * 4 + 4) as usize];
+        // Its corner past the rounding: clear; its edge within it: the plate, drawn whole.
+        assert_eq!(at(1, 1), [0, 0, 0, 0]);
+        assert!(at(64, 2)[3] > 200, "the plate's edge is drawn");
+        // Where the glyph was and is not: the plate of its own blue, laid off and lifted — a lit mid-blue, not the
+        // glyph's dark one, and bluer than red by far.
+        let (b, g, r, a) = (at(12, 64)[0], at(12, 64)[1], at(12, 64)[2], at(12, 64)[3]);
+        assert!(a > 250 && b > r + 40 && b > 120, "{:?}", at(12, 64));
+        assert!(g < b && r < b, "{:?}", at(12, 64));
+        // The glyph itself, whole in its middle, still the colour it was.
+        assert!(at(64, 64)[2] < 60 && at(64, 64)[0] > 180, "{:?}", at(64, 64));
+    }
+
+    /// A picture that is a tile of itself — drawn along its whole border, a modern app's icon — is left exactly as
+    /// the shell gave it: no plate behind a tile.
+    #[test]
+    fn a_tile_is_left_a_tile() {
+        // A red rounded square filling the tile but for its corners: its border drawn near and dear.
+        let radius: f32 = 128.0 * 0.25;
+        let pixels = (0..128u32).flat_map(|y| (0..128u32).flat_map(move |x| {
+            let (xf, yf) = (x as f32, y as f32);
+            let (cx, cy) = (radius.max(xf.min(127.0 - radius)), radius.max(yf.min(127.0 - radius)));
+            if (xf - cx).hypot(yf - cy) - radius < 0.0 { [0, 0, 255, 255] } else { [0, 0, 0, 0] }
+        })).collect();
+        let was = Picture { key: 7, size: (128, 128), pixels: Arc::new(pixels) };
+        let left = on_plate(was.clone(), 9);
+        assert_eq!(&left.pixels[..], &was.pixels[..]);
+    }
 }
 
 #[cfg(test)]
@@ -690,5 +850,32 @@ mod tests {
         let past = icon.pixels.chunks_exact(4).filter(|pixel| pixel[..3].iter().any(|colour| *colour > pixel[3])).count();
         assert!(soft > 0, "no soft edge to look at");
         assert_eq!(past, 0, "of {soft} pixels at its soft edges, {past} have a colour past their alpha");
+    }
+
+    /// What share of the square this PC's own program icons fill: the read that sets `WHOLE`, the line between a
+    /// glyph that wants a plate and a tile that does not. Printed, not asserted — it asks the shell of the PC it runs
+    /// on, whose icons differ machine to machine.
+    #[test]
+    #[ignore = "asks this PC's shell"]
+    fn what_share_of_the_square_real_icons_fill() {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
+        }
+        let windows = std::env::var("SystemRoot").unwrap();
+        for name in ["explorer.exe", "notepad.exe", "mspaint.exe", "calc.exe", "wordpad.exe"] {
+            let path = std::path::Path::new(&windows).join(name);
+            let Ok(thumb) = super::picture(&path, 128, super::Made::Icon) else {
+                println!("{name}: no icon");
+                continue;
+            };
+            // (Squared as the tile is filled: the share of the whole 128² square drawn, which is what `on_plate`
+            // weighs against `WHOLE` — the trimmed bounding box is padded back to the side first.)
+            let made = super::squared(&thumb, 128, 1);
+            let filled = made.pixels.chunks_exact(4).filter(|pixel| pixel[3] > 128).count();
+            let share = filled as f32 / (128 * 128) as f32;
+            // (Whether `on_plate` indeed leaves a full square be and plates a thin one: the read against the share.)
+            let left = super::on_plate(made.clone(), 2).pixels == made.pixels;
+            println!("{name}: fills {:.0}% of the square -> {}", share * 100.0, if left { "a tile left be" } else { "a plate asked for" });
+        }
     }
 }

@@ -191,7 +191,9 @@ fn kept_mark(target: &str) -> Icon {
 /// How one of Glance's doors is marked.
 fn door_mark(door: DockDoor) -> Icon {
     match door {
-        // (The workbench takes the mark its own page in the settings carries.)
+        // (The grid of every program; the workbench, which was drawn with it, takes the mark its own page in the
+        // settings carries.)
+        DockDoor::Launchpad => Icon::LayoutGrid,
         DockDoor::Monitor => Icon::Activity,
         DockDoor::Workbench => Icon::PencilRuler,
         DockDoor::Music => Icon::Music,
@@ -203,6 +205,7 @@ fn door_mark(door: DockDoor) -> Icon {
 /// The hue a door's plate is filled with — a colour of its own for each, as macOS gives every app one.
 fn door_colour(door: DockDoor) -> u32 {
     match door {
+        DockDoor::Launchpad => 0x6E56CF, // violet: the grid of every program
         DockDoor::Monitor => 0x1FA37A,   // green: the readings, a pulse
         DockDoor::Workbench => 0xE0862C, // amber: the tools
         DockDoor::Music => 0xE23A5E,     // rose: the music
@@ -214,6 +217,13 @@ fn door_colour(door: DockDoor) -> u32 {
 /// A door's name, as the dock says it.
 pub fn door_says(door: DockDoor, lang: Lang) -> &'static str {
     match door {
+        DockDoor::Launchpad => {
+            if lang == Lang::Zh {
+                "启动台"
+            } else {
+                "Launchpad"
+            }
+        }
         DockDoor::Monitor => {
             if lang == Lang::Zh {
                 "监控面板"

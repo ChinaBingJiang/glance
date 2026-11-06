@@ -25,6 +25,8 @@ pub mod glass;
 pub mod icons;
 #[cfg(windows)]
 pub mod keys;
+/// The launchpad's own shape: its grid, its pages, its search (see `crate::launchpad`).
+pub mod launchpad;
 #[cfg(windows)]
 pub mod menu;
 pub mod morph;

@@ -740,10 +740,22 @@ pub enum DockItem {
     Gap,
 }
 
+/// Programs merged into one folder of their own on the launchpad: what the folder is called, and the programs in it,
+/// each as the Start menu names what opens it (as a tile kept on the dock, see `DockItem::Keep`).
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaunchFolder {
+    pub name: String,
+    /// What opens each program in it, in their order.
+    pub items: Vec<String>,
+}
+
 /// A door of Glance's own, on the dock.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DockDoor {
+    /// Every program, on a full screen of its own (see `crate::launchpad`).
+    Launchpad,
     /// The panel, at its edge.
     Monitor,
     /// The workbench, where the notes are too.
@@ -760,6 +772,7 @@ pub enum DockDoor {
 pub fn default_dock_items() -> Vec<DockItem> {
     use {DockDoor as D, DockItem as I};
     vec![
+        I::Door { door: D::Launchpad },
         I::Door { door: D::Monitor },
         I::Door { door: D::Workbench },
         I::Door { door: D::Music },
@@ -806,6 +819,12 @@ pub struct DockSettings {
     pub show_open: bool,
     /// The tiles, in their order.
     pub items: Vec<DockItem>,
+    /// The launchpad's folders: programs merged into one tile of their own.
+    pub folders: Vec<LaunchFolder>,
+    /// The launchpad's page: how many tiles across, 0 as the screen chooses. The tiles' side follows.
+    pub pad_cols: usize,
+    /// And how many down, 0 as the screen chooses.
+    pub pad_rows: usize,
 }
 
 impl Default for DockSettings {
@@ -827,6 +846,9 @@ impl Default for DockSettings {
             running: true,
             show_open: true,
             items: default_dock_items(),
+            folders: Vec::new(),
+            pad_cols: 0,
+            pad_rows: 0,
         }
     }
 }

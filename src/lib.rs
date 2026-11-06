@@ -143,6 +143,8 @@ mod dock_running;
 #[cfg(windows)]
 mod docker;
 #[cfg(windows)]
+mod launchpad;
+#[cfg(windows)]
 mod latency;
 
 

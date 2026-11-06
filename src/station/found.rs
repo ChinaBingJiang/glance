@@ -88,6 +88,10 @@ fn read() -> Option<Vec<Found>> {
             if !crate::station::apps::is_program(&target) {
                 continue;
             }
+            // (And a program's door out is left out with them: the same word is on the tile's menu instead.)
+            if crate::station::apps::is_uninstaller(&name, &target) {
+                continue;
+            }
             let initials = initials(&name);
             found.push(Found { name, target, initials });
         }

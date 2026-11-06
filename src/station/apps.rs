@@ -233,6 +233,99 @@ pub fn runs(path: &Path) -> bool {
     path.extension().is_some_and(|extension| PROGRAMS.iter().any(|program| extension.eq_ignore_ascii_case(program)))
 }
 
+/// Whether what the Start menu lists under `name`, lying at `where_it_lies`, is a program's door out rather than a
+/// program to be used: “Uninstall Foo”, “卸载 Foo”, a shortcut standing in an installer's own `Uninstall` folder or
+/// on Inno Setup's `unins000.exe`. These make no tile of their own — the same word is offered on the tile's menu
+/// instead (see `uninstaller`). A utility whose own name is an uninstaller (Revo Uninstaller) is a program to be
+/// used, and stays: only a name beginning with the word is a door out.
+pub fn is_uninstaller(name: &str, where_it_lies: &str) -> bool {
+    let named = name.trim().to_lowercase();
+    if named.starts_with("卸载") || named.starts_with("uninstall") { return true; }
+    let lies = where_it_lies.to_lowercase().replace('/', "\\");
+    let (folder, last) = match lies.rsplit_once('\\') { Some((here, one)) => (here, one), None => ("", lies.as_str()) };
+    let stem = last.split('.').next().unwrap_or(last);
+    folder.split('\\').any(|part| part == "uninstall") || stem.starts_with("unins") || stem == "uninstall"
+}
+
+/// The word that takes the program named `name` off this machine, as its installer left it in the registry's list of
+/// them: the entry called the same, or nearly (the tile's “Chrome” for the entry's “Google Chrome”), and its
+/// `UninstallString`. None where the list says nothing of it — a Store app, a portable program, one installed by
+/// another person on this machine.
+#[cfg(windows)]
+pub fn uninstaller(name: &str) -> Option<String> {
+    use windows::core::{HSTRING, PWSTR};
+    use windows::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    let want = name.trim().to_lowercase();
+    if want.is_empty() { return None; }
+    // (Every account's and this one's, both the 64 and the 32 bit list of them.)
+    const ROOTS: [(bool, &str); 3] = [
+        (true, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (true, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (false, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+    // (The entry called the same answers at once; one called nearly is kept till all three lists have been read, that
+    // the exact one not be missed in a later list.)
+    let mut near: Option<String> = None;
+    for (machine, root) in ROOTS {
+        let stock = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+        let mut parent = HKEY::default();
+        if unsafe { RegOpenKeyExW(stock, &HSTRING::from(root), None, KEY_READ, &mut parent) }.is_err() { continue; }
+        for index in 0.. {
+            let mut named = [0u16; 256];
+            let mut length = named.len() as u32;
+            if unsafe { RegEnumKeyExW(parent, index, Some(PWSTR(named.as_mut_ptr())), &mut length, None, None, None, None) }.is_err() { break; }
+            let key = format!("{root}\\{}", String::from_utf16_lossy(&named[..length as usize]));
+            let Some(word) = text(stock, &key, "UninstallString") else { continue };
+            let word = word.trim().to_owned();
+            if word.is_empty() { continue; }
+            let shown = text(stock, &key, "DisplayName").unwrap_or_default().trim().to_lowercase();
+            // (Nearly: one name inside the other, neither too short to mean anything. The entry called the same always
+            // answers first, so a loose one only stands where the list has no other word for the program.)
+            if shown != want && !(shown.len() >= 4 && want.len() >= 4 && (shown.contains(&want) || want.contains(&shown))) { continue; }
+            // (A patch, or a component Windows keeps off its own list of programs, is no program's door out.)
+            if text(stock, &key, "SystemComponent").as_deref() == Some("1") || text(stock, &key, "ParentDisplayName").is_some() { continue; }
+            if shown == want { let _ = unsafe { RegCloseKey(parent) }; return Some(word); }
+            if near.is_none() { near = Some(word); }
+        }
+        let _ = unsafe { RegCloseKey(parent) };
+    }
+    near
+}
+
+/// One text value of the registry key at `key` under `stock`, expanded where it is written to be; none where it is
+/// missing or is not text.
+#[cfg(windows)]
+fn text(stock: windows::Win32::System::Registry::HKEY, key: &str, value: &str) -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
+    let mut data = vec![0u16; 512];
+    let mut size = (data.len() * 2) as u32;
+    if unsafe { RegGetValueW(stock, &HSTRING::from(key), &HSTRING::from(value), RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, None, Some(data.as_mut_ptr().cast()), Some(&mut size)) }.is_err() { return None; }
+    let text = String::from_utf16_lossy(&data[..(size as usize / 2).min(data.len())]);
+    Some(text.trim_end_matches('\0').to_owned())
+}
+
+#[cfg(not(windows))]
+pub fn uninstaller(_: &str) -> Option<String> {
+    None
+}
+
+/// An uninstaller's own words, as its installer wrote them, split into what to run and what to give it: a program
+/// between quotes, or a bare one up to its first space — where that leaves no file that is, the longest front of the
+/// line that is a file takes the rest as its given words, for an unquoted path with spaces in it is written more
+/// often than it should be.
+pub fn command_line(line: &str) -> (String, String) {
+    let line = line.trim();
+    if let Some(rest) = line.strip_prefix('"') {
+        return match rest.find('"') { Some(at) => (rest[..at].to_string(), rest[at + 1..].trim().to_string()), None => (rest.to_string(), String::new()) };
+    }
+    let places: Vec<usize> = line.match_indices(' ').map(|(at, _)| at).collect();
+    for at in &places {
+        if Path::new(&line[..*at]).is_file() { return (line[..*at].to_string(), line[*at..].trim().to_string()); }
+    }
+    match places.first() { Some(at) => (line[..*at].to_string(), line[*at..].trim().to_string()), None => (line.to_string(), String::new()) }
+}
+
 /// The thing kept that opens `moving` put before the one that opens `before` (none: last), each found where it is
 /// now (what is kept may have changed since they were shown): nothing where it is gone, or put before itself.
 pub fn put_before(apps: &mut Vec<App>, moving: &str, before: Option<&str>) {
@@ -363,5 +456,25 @@ mod tests {
         let store = App { target: r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into(), name: "Calculator".into() };
         assert_eq!(store.location(), None);
         assert!(App::of_url("ftp://x").is_none());
+    }
+
+    /// A door out known by its words or by where it stands; a utility whose own name says it stays on the list.
+    #[test]
+    fn leaves_the_door_out_off_the_list() {
+        assert!(is_uninstaller("Uninstall Foo", r"C:\Tools\Foo\Uninstall.exe"));
+        assert!(is_uninstaller("卸载 Foo", r"C:\Tools\Foo\foo.exe"));
+        assert!(is_uninstaller("Foo", r"C:\Tools\Foo\uninstall\remove.exe"));
+        assert!(is_uninstaller("Foo", r"C:\Tools\Foo\unins000.exe"));
+        assert!(!is_uninstaller("Revo Uninstaller", r"C:\Tools\Revo\RevoUninstaller.exe"));
+        assert!(!is_uninstaller("Foo", r"C:\Tools\Foo\Foo.exe"));
+    }
+
+    /// An installer's own words cut into what to run and what to give it, between quotes or bare.
+    #[test]
+    fn cuts_a_line_into_its_parts() {
+        assert_eq!(command_line("\"C:\\Tools\\unins000.exe\" /SILENT"), (r"C:\Tools\unins000.exe".to_string(), "/SILENT".to_string()));
+        assert_eq!(command_line("\"C:\\Tools\\gone.exe\""), (r"C:\Tools\gone.exe".to_string(), String::new()));
+        assert_eq!(command_line("msiexec.exe /X {123}"), ("msiexec.exe".to_string(), "/X {123}".to_string()));
+        assert_eq!(command_line("notepad"), ("notepad".to_string(), String::new()));
     }
 }
