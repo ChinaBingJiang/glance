@@ -988,6 +988,15 @@ enum Page {
     Phone,
     /// A page of the machine's own settings: its date, time and zone.
     DateTime,
+    /// The machine's own pages Glance only opens where Windows keeps them (see `Row::Do`).
+    Display,
+    Sound,
+    Network,
+    Notifications,
+    Storage,
+    Privacy,
+    Gaming,
+    WindowsUpdate,
     General,
     /// The reports this PC sent, as threads: a page of General's, opened from it (see `Row::MyReports`).
     Reports,
@@ -1018,9 +1027,11 @@ impl Tab {
 enum NavItem {
     Page(Page),
     Components,
+    /// The heading over the machine's own settings pages.
+    System,
 }
 
-const NAV_ITEMS: [NavItem; 11] = [
+const NAV_ITEMS: [NavItem; 20] = [
     NavItem::Page(Page::Layout),
     NavItem::Page(Page::Look),
     NavItem::Components,
@@ -1030,8 +1041,17 @@ const NAV_ITEMS: [NavItem; 11] = [
     NavItem::Page(Page::Launchpad),
     NavItem::Page(Page::Music),
     NavItem::Page(Page::Phone),
-    NavItem::Page(Page::DateTime),
     NavItem::Page(Page::General),
+    NavItem::System,
+    NavItem::Page(Page::DateTime),
+    NavItem::Page(Page::Display),
+    NavItem::Page(Page::Sound),
+    NavItem::Page(Page::Network),
+    NavItem::Page(Page::Notifications),
+    NavItem::Page(Page::Storage),
+    NavItem::Page(Page::Privacy),
+    NavItem::Page(Page::Gaming),
+    NavItem::Page(Page::WindowsUpdate),
 ];
 
 impl NavItem {
@@ -1048,6 +1068,15 @@ impl NavItem {
             NavItem::Page(Page::Phone) => pick(lang, "手机互联", "Phone"),
             NavItem::Page(Page::DateTime) => pick(lang, "时间与语言", "Time & Language"),
             NavItem::Page(Page::General | Page::Reports) => pick(lang, "通用", "General"),
+            NavItem::System => pick(lang, "系统", "System"),
+            NavItem::Page(Page::Display) => pick(lang, "显示", "Display"),
+            NavItem::Page(Page::Sound) => pick(lang, "声音", "Sound"),
+            NavItem::Page(Page::Network) => pick(lang, "网络和 Internet", "Network & internet"),
+            NavItem::Page(Page::Notifications) => pick(lang, "通知", "Notifications"),
+            NavItem::Page(Page::Storage) => pick(lang, "存储", "Storage"),
+            NavItem::Page(Page::Privacy) => pick(lang, "隐私和安全性", "Privacy & security"),
+            NavItem::Page(Page::Gaming) => pick(lang, "游戏", "Gaming"),
+            NavItem::Page(Page::WindowsUpdate) => pick(lang, "Windows 更新", "Windows Update"),
         }
     }
 
@@ -1065,6 +1094,14 @@ impl Page {
             Page::Music => Icon::Music,
             Page::Phone => Icon::Smartphone,
             Page::DateTime => Icon::Clock,
+            Page::Display => Icon::AppWindow,
+            Page::Sound => Icon::Volume,
+            Page::Network => Icon::Network,
+            Page::Notifications => Icon::MessageCircle,
+            Page::Storage => Icon::Disk,
+            Page::Privacy => Icon::Shield,
+            Page::Gaming => Icon::Game,
+            Page::WindowsUpdate => Icon::Update,
             Page::General | Page::Reports => Icon::Settings,
         }
     }
@@ -1738,6 +1775,9 @@ struct Ui {
     phone: PhonePage,
     scroll: f32,
     scroll_target: f32,
+    /// The nav column's own scroll, eased as the list's is and held at 0 while its items fit the window.
+    nav_scroll: f32,
+    nav_scroll_target: f32,
     motion: HashMap<String, Transition>,
     /// Thumbs land where they belong without sliding (after relabelling).
     settle_thumbs: bool,
@@ -2008,6 +2048,8 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             uninstaller: std::env::current_exe().ok().and_then(|exe| elevation::trusted(&exe.with_file_name("uninstall.exe"))),
             scroll: 0.0,
             scroll_target: 0.0,
+            nav_scroll: 0.0,
+            nav_scroll_target: 0.0,
             motion: HashMap::new(),
             settle_thumbs: true,
             by_hand: false,
@@ -2603,6 +2645,52 @@ impl Ui {
                     what: Target::Open("ms-settings:regionlanguage".into()),
                 }));
             }
+            (Page::Display, _) => rows.push(Row::Do(Do {
+                name: ("显示设置", "Display settings"),
+                word: ("分辨率、方向、缩放与多屏排列均由系统设置", "Resolution, orientation, scaling, and how the screens lie are set here by Windows"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:display".into()),
+            })),
+            (Page::Sound, _) => rows.push(Row::Do(Do {
+                name: ("输出与音量", "Output and volume"),
+                word: ("选择声音播放的设备并调它的音量", "Pick the device sound plays through, and set its volume"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:sound".into()),
+            })),
+            (Page::Network, _) => rows.extend([
+                Row::Do(Do { name: ("WLAN", "Wi-Fi"), word: ("连上无线网，看存过的网络", "Join a wireless network and see the ones saved"), button: ("打开", "Open"), what: Target::Open("ms-settings:network-wifi".into()) }),
+                Row::Do(Do { name: ("网络状态", "Network status"), word: ("本机连接、地址与用量", "This PC's connections, its addresses, and its usage"), button: ("打开", "Open"), what: Target::Open("ms-settings:network-status".into()) }),
+            ]),
+            (Page::Notifications, _) => rows.push(Row::Do(Do {
+                name: ("通知和勿扰", "Notifications and do not disturb"),
+                word: ("哪些应用可打扰你，横幅与锁屏怎样显示", "Which apps may reach you, and how banners and the lock screen show them"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:notifications".into()),
+            })),
+            (Page::Storage, _) => rows.push(Row::Do(Do {
+                name: ("存储", "Storage"),
+                word: ("各盘的用量、临时文件与存储感知", "How full each drive is, temporary files, and Storage Sense"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:storagesense".into()),
+            })),
+            (Page::Privacy, _) => rows.push(Row::Do(Do {
+                name: ("隐私和安全性", "Privacy & security"),
+                word: ("位置、相机、麦克风等权限总览", "Location, camera, microphone, and the rest of the permissions"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:privacy".into()),
+            })),
+            (Page::Gaming, _) => rows.push(Row::Do(Do {
+                name: ("游戏", "Gaming"),
+                word: ("Xbox Game Bar、它的录制与游戏模式", "Xbox Game Bar, its recording, and Game Mode"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:gaming-gamebar".into()),
+            })),
+            (Page::WindowsUpdate, _) => rows.push(Row::Do(Do {
+                name: ("Windows 更新", "Windows Update"),
+                word: ("检查更新与查看更新历史由系统进行", "Checking for updates and reading their history is the system's to do"),
+                button: ("打开", "Open"),
+                what: Target::Open("ms-settings:windowsupdate".into()),
+            })),
         }
         rows
     }
@@ -4714,7 +4802,7 @@ impl Ui {
     fn stops(&self) -> Vec<Target> {
         let pages = NAV_ITEMS.iter().filter_map(|item| match item {
             NavItem::Page(page) => Some(Target::Nav(*page)),
-            NavItem::Components => None,
+            NavItem::Components | NavItem::System => None,
         });
         let editor = if self.page == Page::Layout { self.editor_stops() } else { Vec::new() };
         pages.chain(self.layout().into_iter()
@@ -4934,6 +5022,12 @@ impl Ui {
             self.next_frame = Instant::now();
             return;
         }
+        if x < NAV {
+            let most = (self.nav_content_height() - self.client().1).max(0.0);
+            self.nav_scroll_target = (self.nav_scroll_target - delta as f32 / 120.0 * WHEEL).clamp(0.0, most);
+            self.next_frame = Instant::now();
+            return;
+        }
         if !(NAV..NAV + self.pane()).contains(&x) {
             return;
         }
@@ -5082,6 +5176,10 @@ impl Ui {
         if (self.scroll_target - self.scroll).abs() < 0.05 {
             self.scroll = self.scroll_target;
         }
+        self.nav_scroll += (self.nav_scroll_target - self.nav_scroll) * (1.0 - E.powf(-dt / SCROLL_EASE));
+        if (self.nav_scroll_target - self.nav_scroll).abs() < 0.05 {
+            self.nav_scroll = self.nav_scroll_target;
+        }
         let mut rect = RECT::default();
         unsafe {
             let _ = GetClientRect(self.hwnd, &mut rect);
@@ -5165,6 +5263,19 @@ impl Ui {
         creep
     }
 
+    /// How tall the nav's items are all told, so the column can scroll when they outgrow the window: what `paint_nav`
+    /// lays from below its title down. Its scroll is held at 0 while they fit (see `nav_scroll`).
+    fn nav_content_height(&self) -> f32 {
+        NAV_ITEMS
+            .iter()
+            .map(|item| match item {
+                NavItem::Components | NavItem::System => NAV_GAP + NAV_HEADING,
+                NavItem::Page(Page::Phone) => NAV_ITEM + 4.0 + NAV_GAP,
+                NavItem::Page(_) => NAV_ITEM + 4.0,
+            })
+            .sum()
+    }
+
     /// The pages' list: the window's name, then each page, the one shown lit and marked in the accent. The components'
     /// own pages come under their heading (a name, not a page), and a rule sets them apart from the phone's and
     /// Glance's own after them.
@@ -5177,10 +5288,13 @@ impl Ui {
         text_centred(frame, pick(lang, "设置", "Settings"), title, palette.text, left + 8.0, PAD_TOP + 18.0, width, Align::Start);
         let label = Font::new(Family::Segoe, 14.0, 400.0);
         let heading = Font::new(Family::Segoe, 12.0, 600.0);
-        let mut y = PAD_TOP + 52.0;
+        let top = PAD_TOP + 52.0;
+        let view = self.client().1;
+        let mut y = top - self.nav_scroll;
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(0.0, top, NAV, (view - top).max(0.0)), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
         for item in NAV_ITEMS {
             let page = match item {
-                NavItem::Components => {
+                NavItem::Components | NavItem::System => {
                     y += NAV_GAP;
                     text_centred(frame, item.name(lang), heading, palette.text3, left + 12.0, y + NAV_HEADING / 2.0, width, Align::Start);
                     y += NAV_HEADING;
@@ -5195,6 +5309,10 @@ impl Ui {
             }
             let r = Rect { x: left, y, w: width, h: NAV_ITEM };
             y += NAV_ITEM + 4.0;
+            // (Scrolled clean out of the column: neither drawn nor clickable.)
+            if r.y + r.h < top || r.y > view {
+                continue;
+            }
             let target = Target::Nav(page);
             // (The reports' page is General's own.)
             let (shown, hover) = (page == self.page || (page == Page::General && self.page == Page::Reports), hovered.as_ref() == Some(&target));
@@ -5212,6 +5330,16 @@ impl Ui {
                 fill(frame, palette.selection, r.x + r.w - 20.0, cy - 3.0, 6.0, 6.0, 3.0);
             }
             self.targets.push((r, target));
+        }
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        // A hairline thumb beside the column once its items outgrow the window, so it reads as scrollable.
+        let room = (view - top).max(0.0);
+        let most = (self.nav_content_height() - room).max(0.0);
+        if most > 0.0 {
+            let thumb = (room * room / self.nav_content_height()).max(24.0);
+            let at = top + (room - thumb) * self.nav_scroll / most;
+            let over = self.pointer.is_some_and(|(x, _)| x < NAV);
+            fill(frame, palette.text3.alpha(if over { 0.7 } else { 0.4 }), NAV - 5.0, at, 2.0, thumb, 1.0);
         }
     }
 
