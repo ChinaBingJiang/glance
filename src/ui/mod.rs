@@ -48,6 +48,8 @@ pub mod settings_window;
 #[cfg(windows)]
 pub mod skins;
 pub mod smoke;
+#[cfg(windows)]
+pub mod system_settings;
 pub mod text;
 pub mod theme;
 pub mod thumb;
