@@ -59,6 +59,10 @@ pub enum Ask {
     /// The same, asked of the administrator: the shell's `runas` verb, which asks the person for leave and runs what
     /// it opens elevated.
     LaunchAs(String),
+    /// A program taken off this machine: its installer's own words, as the registry kept them (see
+    /// `crate::station::apps::uninstaller`), run as they were left — the uninstaller asks for what leave it needs of
+    /// its own.
+    Uninstall(String),
 }
 
 /// What is done with files not on the station (see `Ask::Files`): put on the clipboard (copied from the files come
@@ -371,6 +375,17 @@ fn launch(target: &str, verb: windows::core::PCWSTR) {
     }
 }
 
+/// A program's own door out run: the word its installer left for it in the registry, cut into what to run and what to
+/// give it, and asked of the shell — which finds `msiexec.exe` again, and asks the person for the administrator's
+/// leave where the uninstaller needs it (see `crate::station::apps::command_line`).
+fn uninstall(word: &str) {
+    let (file, given) = super::apps::command_line(word);
+    let (file, given) = (windows::core::HSTRING::from(&file), windows::core::HSTRING::from(&given));
+    unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(None, w!("open"), &file, &given, windows::core::PCWSTR::null(), windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
+    }
+}
+
 fn by_the_shell(act: impl FnOnce() + Send + 'static) {
     let _ = std::thread::Builder::new().name("glance: shell".into()).spawn(move || {
         unsafe {
@@ -604,6 +619,7 @@ impl Station {
                 },
                 Ask::Launch(target) => by_the_shell(move || launch(&target, w!("open"))),
                 Ask::LaunchAs(target) => by_the_shell(move || launch(&target, w!("runas"))),
+                Ask::Uninstall(word) => by_the_shell(move || uninstall(&word)),
                 Ask::CopyText(text, from) => {
                     self.copy(&Content::Text(text), false, from);
                 }

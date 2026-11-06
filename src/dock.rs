@@ -54,6 +54,8 @@ pub enum Choice {
     Edge(DockEdge),
     /// One more gap at the end of the row.
     Divider,
+    /// The launchpad's tile put on the row: its door, and the screen of every program with it.
+    Launchpad,
     /// A tile pressed, or asked to be opened from the menu.
     Act(Act),
     /// A tile taken off the dock (the setting it stands for).
@@ -72,6 +74,7 @@ pub enum Choice {
 /// What the dock's own tiles tell is running: which of Glance's doors stand open.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct Lights {
+    pub launchpad: bool,
     pub monitor: bool,
     pub workbench: bool,
     pub music: bool,
@@ -82,6 +85,7 @@ impl Lights {
     /// Whether `door` stands open.
     fn lit(&self, door: DockDoor) -> bool {
         match door {
+            DockDoor::Launchpad => self.launchpad,
             DockDoor::Monitor => self.monitor,
             DockDoor::Workbench => self.workbench,
             DockDoor::Music => self.music,
@@ -341,6 +345,12 @@ impl Dock {
     /// Whether the left button is down on it, dragged or barely pressed.
     pub fn in_hand(&self) -> bool {
         self.hand.is_some()
+    }
+
+    /// Where its glass stands on the screen (physical px), while it is up and out of the edge it tucks into: none
+    /// where there is nothing to put a tile on (see `crate::launchpad`, which drops what is carried onto it).
+    pub fn glass(&self) -> Option<RECT> {
+        (self.out && !self.tucked).then(|| self.glass_at(1.0))
     }
 
     /// Puts the dock up as `settings` ask, on the screen they name (the pointer's, where none), above all but
@@ -1329,6 +1339,21 @@ impl Dock {
                 false,
             ));
             // (Its tile only offered where the row has none: the screen of every program, reached from the dock.)
+            let keeps = self.was.items.iter().any(|item| {
+                *item
+                    == DockItem::Door {
+                        door: DockDoor::Launchpad,
+                    }
+            });
+            if !keeps {
+                rows.push((
+                    Choice::Launchpad,
+                    say("添加启动台", "Add the launchpad"),
+                    Icon::LayoutGrid,
+                    false,
+                    false,
+                ));
+            }
             rows.push((
                 Choice::Divider,
                 say("添加空位", "Add a gap"),
@@ -1430,5 +1455,13 @@ impl Dock {
 pub(crate) fn pictured(target: &str, side: u32) -> Option<crate::ui::canvas::Picture> {
     (!target.starts_with("https://") && !target.starts_with("http://"))
         .then(|| crate::station::thumbs::icon(std::path::Path::new(target), side))
+        .flatten()
+}
+
+/// A launchpad tile's picture: the shell's icon set on a plate of its own colours where it is a thin glyph, as on a
+/// Mac's (see `crate::station::thumbs::plated`); a whole tile's picture, a modern app's, as it is.
+pub(crate) fn plated(target: &str, side: u32) -> Option<crate::ui::canvas::Picture> {
+    (!target.starts_with("https://") && !target.starts_with("http://"))
+        .then(|| crate::station::thumbs::plated(std::path::Path::new(target), side))
         .flatten()
 }
