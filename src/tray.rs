@@ -260,6 +260,8 @@ const SETTINGS: usize = 2;
 const CHECK: usize = 3;
 const QUIT: usize = 4;
 const RECALL: usize = 5;
+/// This PC, named as it is, in a card of its own.
+const ABOUT: usize = 6;
 
 /// The icon's menu, opening up from `(x, y)` on the screen as the taskbar's do, up (see `menu::Menu`), with what each
 /// of its choices is (see `chosen`). On the panel's thread.
@@ -276,6 +278,7 @@ pub fn open_menu(x: i32, y: i32, over_the_panel: bool) -> Option<(crate::ui::men
         choices.push((RECALL, if zh { "召回小组件" } else { "Bring the widget back" }, Icon::Restore, false));
     }
     choices.push((SETTINGS, if zh { "设置" } else { "Settings" }, Icon::Settings, false));
+    choices.push((ABOUT, if zh { "关于本机" } else { "About this PC" }, Icon::Cpu, false));
     choices.push((CHECK, if zh { "检查更新" } else { "Check for updates" }, Icon::Update, false));
     choices.push((QUIT, if zh { "退出 Glance" } else { "Quit Glance" }, Icon::Quit, true));
     let items: Vec<Item<'static>> = choices.iter().map(|(_, label, icon, rule_before)| Item { label, mark: Some(crate::ui::menu::Mark::Icon(*icon)), checked: false, rule_before: *rule_before }).collect();
@@ -312,6 +315,7 @@ pub fn chosen(choice: Option<usize>, choices: &[usize]) {
         OPEN => crate::app().controller.open_from_tray(),
         RECALL => crate::app().controller.recall_widget(),
         SETTINGS => crate::show_settings(icon_place()),
+        ABOUT => crate::show_about(icon_place()),
         CHECK => crate::update::check_now(crate::update::Asker::Tray),
         QUIT => crate::quit(),
         _ => {}

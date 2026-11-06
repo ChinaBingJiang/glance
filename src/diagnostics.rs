@@ -180,7 +180,7 @@ fn presenting() -> Vec<String> {
 
 /// Windows' name, release and build. Windows 11 keeps "Windows 10" in its
 /// product name; its builds, from 22000, tell it apart.
-fn windows(key: windows::core::PCWSTR) -> String {
+pub(crate) fn windows(key: windows::core::PCWSTR) -> String {
     let build = reg_string(key, w!("CurrentBuild"));
     let mut name = reg_string(key, w!("ProductName"));
     if build.parse::<u32>().is_ok_and(|build| build >= 22000) {

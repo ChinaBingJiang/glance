@@ -6301,7 +6301,7 @@ fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
 
 /// (Through the frame's own fill, put on whole pixels as everything Glance draws is: drawn straight, the settings'
 /// rails and cards were spread over pixels, softer than the rest, and a slider's knob stood half a pixel off its rail.)
-fn fill(frame: &Frame, color: Color, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+pub(crate) fn fill(frame: &Frame, color: Color, x: f32, y: f32, w: f32, h: f32, radius: f32) {
     Canvas::fill_rounded(frame, color, x, y, w, h, radius.min(w / 2.0).min(h / 2.0));
 }
 
@@ -6345,7 +6345,7 @@ fn card(frame: &Frame, palette: &Palette, x: f32, y: f32, w: f32, h: f32, color:
 
 /// One line of text centred on `cy`.
 #[allow(clippy::too_many_arguments)]
-fn text_centred(frame: &Frame, text: &str, font: Font, color: Color, x: f32, cy: f32, width: f32, align: Align) {
+pub(crate) fn text_centred(frame: &Frame, text: &str, font: Font, color: Color, x: f32, cy: f32, width: f32, align: Align) {
     let (ascent, descent) = frame.gfx.baseline(font);
     frame.text(text, font, color, x, cy - (ascent + descent) / 2.0, width, align);
 }

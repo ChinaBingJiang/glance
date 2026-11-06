@@ -328,6 +328,14 @@ pub(crate) fn show_workbench_settings(place: Option<windows::Win32::Foundation::
     ui::settings_window::open_at_workbench(place);
 }
 
+/// The about-this-PC card, poured out of `place`: a small window of its own, not the settings (see `ui::about`).
+/// The panel gives way to it as it does to the settings.
+#[cfg(windows)]
+pub(crate) fn show_about(place: Option<windows::Win32::Foundation::RECT>) {
+    app().controller.dismiss();
+    ui::about::open(place);
+}
+
 #[cfg(windows)]
 pub(crate) fn quit() {
     tray::quit();

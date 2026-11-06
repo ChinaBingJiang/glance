@@ -2,6 +2,8 @@
 //! each platform draws it (on Windows, Direct2D and DirectWrite on a
 //! DirectComposition surface of the panel's own window).
 
+#[cfg(windows)]
+pub mod about;
 pub mod arrange;
 #[cfg(windows)]
 pub mod backdrop;
@@ -42,6 +44,8 @@ pub(crate) mod picture;
 pub mod music;
 #[cfg(windows)]
 pub mod settings_window;
+#[cfg(windows)]
+pub mod system_settings;
 #[cfg(windows)]
 pub mod skins;
 pub mod smoke;
