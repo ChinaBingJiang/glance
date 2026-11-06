@@ -1355,6 +1355,9 @@ enum Target {
     More,
     /// Asks for a newer release now.
     CheckNow,
+    /// Opens one of Windows' own pages (a ms-settings: URI), or any address:
+    /// where a setting is the machine's to keep and Glance only leads there.
+    Open(String),
     Diagnostics,
     Update,
     Uninstall,
@@ -1396,6 +1399,17 @@ enum NetEaseWork {
 
 /// Modules for developers: listed under "More" while off, out of the way.
 const MORE: [&str; 2] = ["wsl", "docker"];
+
+/// A row with a single button of its own, for a setting that is Windows' to
+/// keep: Glance cannot change it here, only say what it is and open where it
+/// can be. Its name, the word under it, and the button's text are each told in
+/// both tongues (Chinese, English); `what` is where pressing leads.
+struct Do {
+    name: (&'static str, &'static str),
+    word: (&'static str, &'static str),
+    button: (&'static str, &'static str),
+    what: Target,
+}
 
 enum Row {
     /// The page's name.
@@ -1448,6 +1462,9 @@ enum Row {
     Group(&'static str),
     /// A line read from the machine, told rather than set: what one of its own pages shows but does not keep.
     Info(String),
+    /// A door to one of Windows' own pages: a row with a button that opens
+    /// what Glance cannot set here (see `Do`).
+    Do(Do),
     /// NetEase Cloud Music's lyrics plugin (InfLink-rs): how it is, and installing or taking it back.
     NetEase,
 }
@@ -2570,11 +2587,21 @@ impl Ui {
                     pick(lang, "当前时区", "Current zone"),
                     if zone.is_empty() { pick(lang, "未知", "Unknown") } else { zone.as_str() }
                 )));
-                rows.push(Row::Note(pick(
-                    lang,
-                    "改时区与校时需管理员权限；自动校时仍由系统管",
-                    "Changing the zone and syncing the clock want an administrator's leave; keeping the time automatic is the system's",
-                )));
+                // (The zone and the clock are Windows' to keep: Glance reads them
+                //  above and opens the page where they are set.)
+                rows.push(Row::Do(Do {
+                    name: ("日期和时间", "Date & time"),
+                    word: ("更改时区、自动校时与显示格式均由系统设置", "The zone, keeping the clock, and the formats are set here by Windows"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:dateandtime".into()),
+                }));
+                rows.push(Row::Group(pick(lang, "区域和语言", "Region & language")));
+                rows.push(Row::Do(Do {
+                    name: ("语言和区域", "Language & region"),
+                    word: ("Windows 显示语言、区域格式与键盘输入法", "Windows' display language, regional formats, and keyboard input methods"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:regionlanguage".into()),
+                }));
             }
         }
         rows
@@ -3096,6 +3123,11 @@ impl Ui {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
         Some(match row {
+            Row::Do(d) => (
+                p(d.name.0, d.name.1),
+                p(d.word.0, d.word.1),
+                vec![(p(d.button.0, d.button.1), d.what.clone(), Button::Accent)],
+            ),
             Row::Update => {
                 let (version, state) = update::available()?;
                 let name = match lang {
@@ -4652,6 +4684,12 @@ impl Ui {
                     None
                 });
             }
+            // A door to Windows' own page: opened as a link, its URI already
+            // in the shell's tongue.
+            Target::Open(page) => {
+                let uri = HSTRING::from(page);
+                unsafe { ShellExecuteW(Some(self.hwnd), w!("open"), &uri, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+            }
             // Slid by the pointer, stepped by the arrows; pressing alone does nothing more.
             Target::Grip(_) | Target::Slider(_) => {}
         }
@@ -4726,6 +4764,7 @@ impl Ui {
                 Row::AddRecentFolder if self.choosing_folders.is_some() => vec![],
                 Row::AddRecentFolder => vec![Target::AddRecentFolder],
                 Row::Title | Row::Note(_) | Row::Info(_) => vec![],
+                Row::Do(d) => vec![d.what],
             }))
             .chain(editor)
             .collect()
@@ -5638,7 +5677,7 @@ impl Ui {
 
                     }
                 }
-                Row::Update | Row::Version | Row::Shortcut(_) | Row::Diagnostics | Row::MyReports | Row::Report(_) | Row::Uninstall | Row::Quit | Row::Pair | Row::WebPage | Row::Phone(..) | Row::NetEase | Row::RecentFolder(_) | Row::AddRecentFolder => {
+                Row::Update | Row::Version | Row::Shortcut(_) | Row::Diagnostics | Row::MyReports | Row::Report(_) | Row::Uninstall | Row::Quit | Row::Pair | Row::WebPage | Row::Phone(..) | Row::NetEase | Row::RecentFolder(_) | Row::AddRecentFolder | Row::Do(..) => {
                     let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
                     card(frame, palette, left, y, width, row_height, palette.card);
                     let mut right = left + width - ROW_SIDE;
