@@ -65,7 +65,7 @@ use super::view::{self, Rect, Scene};
 use super::wallpaper;
 use crate::elevation;
 use crate::metrics;
-use crate::settings::{Anchor, Edge, OverFullscreen, OverlayShown, Part, Sensitivity, Settings, Shortcut, EDGES};
+use crate::settings::{Anchor, DockEdge, Edge, OverFullscreen, OverlayShown, Part, Sensitivity, Settings, Shortcut, EDGES};
 
 mod layout_page;
 use layout_page::{Carry, Zone};
@@ -980,6 +980,10 @@ enum Page {
     Look,
     Monitor,
     Workbench,
+    /// The dock: its tiles, its edge, and how its glass is drawn.
+    Dock,
+    /// The launchpad: how its page of programs lies.
+    Launchpad,
     Music,
     Phone,
     General,
@@ -1014,12 +1018,14 @@ enum NavItem {
     Components,
 }
 
-const NAV_ITEMS: [NavItem; 8] = [
+const NAV_ITEMS: [NavItem; 10] = [
     NavItem::Page(Page::Layout),
     NavItem::Page(Page::Look),
     NavItem::Components,
     NavItem::Page(Page::Monitor),
     NavItem::Page(Page::Workbench),
+    NavItem::Page(Page::Dock),
+    NavItem::Page(Page::Launchpad),
     NavItem::Page(Page::Music),
     NavItem::Page(Page::Phone),
     NavItem::Page(Page::General),
@@ -1033,6 +1039,8 @@ impl NavItem {
             NavItem::Components => pick(lang, "组件", "Components"),
             NavItem::Page(Page::Monitor) => pick(lang, "监控", "Monitor"),
             NavItem::Page(Page::Workbench) => pick(lang, "工作台", "Workbench"),
+            NavItem::Page(Page::Dock) => "Dock",
+            NavItem::Page(Page::Launchpad) => pick(lang, "启动台", "Launchpad"),
             NavItem::Page(Page::Music) => pick(lang, "音乐", "Music"),
             NavItem::Page(Page::Phone) => pick(lang, "手机互联", "Phone"),
             NavItem::Page(Page::General | Page::Reports) => pick(lang, "通用", "General"),
@@ -1048,6 +1056,8 @@ impl Page {
             Page::Look => Icon::Palette,
             Page::Monitor => Icon::Gauge,
             Page::Workbench => Icon::PencilRuler,
+            Page::Dock => Icon::ArrowDownToLine,
+            Page::Launchpad => Icon::Grid3x3,
             Page::Music => Icon::Music,
             Page::Phone => Icon::Smartphone,
             Page::General | Page::Reports => Icon::Settings,
@@ -1099,6 +1109,17 @@ enum Field {
     StationKeep,
     StationCopy,
     StationAfterDrag,
+    /// The dock's edge it stands along (see `settings::DockEdge`).
+    DockEdge,
+    /// The dock's, on a slider: a tile's side and the room between them (DIPs), the swell as itself, and how much of
+    /// its glass is gone.
+    DockSize,
+    DockSpacing,
+    DockPeak,
+    DockClear,
+    /// The launchpad's grid, slid: tiles across a page, and rows of them, 0 as the screen chooses (see `crate::launchpad`).
+    PadCols,
+    PadRows,
 }
 
 /// How a button looks: outlined; filled in the accent (the one thing to
@@ -1248,6 +1269,14 @@ enum Switch {
     RemoteRaised,
     /// Whether the remote puts the screens out with their signal kept.
     RemoteScreens,
+    /// The dock: whether it shows, and along it, how it stands and what it tells.
+    DockOn,
+    DockHide,
+    DockLock,
+    DockThrough,
+    DockMagnify,
+    DockRunning,
+    DockShowOpen,
 }
 
 /// What a QR code shown is for.
@@ -2105,7 +2134,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         // (Measuring: a page, and a tab of the monitor's, turned to as a press on it turns to it; see `perf`.)
         PERF_TURN if crate::perf::on() => {
-            const PAGES: [Page; 7] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Music, Page::Phone, Page::General];
+            const PAGES: [Page; 9] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Dock, Page::Launchpad, Page::Music, Page::Phone, Page::General];
             const TABS: [Tab; 3] = [Tab::Shown, Tab::Data, Tab::Overlay];
             with_ui(|ui| {
                 crate::perf::mark(|| format!("settings turn {} {}", wparam.0, lparam.0));
@@ -2310,6 +2339,13 @@ fn put_slider(settings: &mut Settings, field: Field, value: f32) {
     match field {
         Field::PanelSize => settings.panel_size = value,
         Field::OverlayClear => settings.overlay.clear = value,
+        Field::DockSize => settings.dock.size = value,
+        Field::DockSpacing => settings.dock.spacing = value,
+        Field::DockPeak => settings.dock.peak = value,
+        Field::DockClear => settings.dock.clear = value,
+        // (The launchpad's grid, whole tiles to a stop: 0 back to the screen's own choice.)
+        Field::PadCols => settings.dock.pad_cols = value.round() as usize,
+        Field::PadRows => settings.dock.pad_rows = value.round() as usize,
         _ => settings.overlay.size = value,
     }
 }
@@ -2433,6 +2469,44 @@ impl Ui {
                 if self.settings.station.recent {
                     self.recent_rows(&mut rows);
                 }
+            }
+            (Page::Dock, _) => {
+                rows.extend([
+                    Row::Switch(Switch::DockOn),
+                    Row::Choice(Field::DockEdge),
+                    Row::Slider(Field::DockSize),
+                    Row::Slider(Field::DockSpacing),
+                    Row::Switch(Switch::DockMagnify),
+                ]);
+                // (Only where the pointer swells anything: with it off, the peak shapes nothing.)
+                if self.settings.dock.magnify {
+                    rows.push(Row::Slider(Field::DockPeak));
+                }
+                rows.extend([
+                    Row::Slider(Field::DockClear),
+                    Row::Group(pick(self.lang, "行为", "Behaviour")),
+                    Row::Switch(Switch::DockHide),
+                    Row::Switch(Switch::DockLock),
+                    Row::Switch(Switch::DockThrough),
+                    Row::Switch(Switch::DockRunning),
+                    Row::Switch(Switch::DockShowOpen),
+                    Row::Note(pick(
+                        self.lang,
+                        "右键点击 Dock 上的图标可添加、移除或调整位置；在工作台中右键点击程序，选择“固定到 Dock”可将其添加进来。鼠标滚轮在图标栏上可调节玻璃透明度",
+                        "Right-click an icon to add, remove or move it. In the workbench, right-click a program and choose “Fix to the dock” to add it. The wheel over the bar turns its glass up or down",
+                    )),
+                ]);
+            }
+            (Page::Launchpad, _) => {
+                rows.extend([
+                    Row::Slider(Field::PadCols),
+                    Row::Slider(Field::PadRows),
+                    Row::Note(pick(
+                        self.lang,
+                        "拖动定下每页的列数与行数，图标跟着它们自动缩放；拖到“自动”则按屏幕大小自己定",
+                        "Drag to set the tiles across a page and the rows of them: the icons scale to fit. Dragged to Automatic, the screen chooses",
+                    )),
+                ]);
             }
             (Page::Music, _) => {
                 rows.push(Row::Choice(Field::MusicSource));
@@ -3323,6 +3397,16 @@ impl Ui {
                 vec!["75 °C".into(), "85 °C".into(), "95 °C".into()],
                 at(&[75, 85, 95], prefs.hot_temp as u64),
             ),
+            Field::DockEdge => (
+                pick(lang, "位置", "Position"),
+                vec![s("屏幕底部", "At the foot of the screen"), s("屏幕顶部", "At the top of the screen")],
+                Some(match settings.dock.edge {
+                    DockEdge::Bottom => 0,
+                    DockEdge::Top => 1,
+                }),
+            ),
+            // (Slid rather than chosen: see `slider`. The grid's 0 is the screen's own choice.)
+            Field::DockSize | Field::DockSpacing | Field::DockPeak | Field::DockClear | Field::PadCols | Field::PadRows => (self.slider(field).0, Vec::new(), None),
         }
     }
 
@@ -3355,6 +3439,9 @@ impl Ui {
             Field::StationKeep => settings.station.keep_days = STATION_DAYS[index],
             Field::StationCopy => settings.station.always_copy = index == 1,
             Field::StationAfterDrag => settings.station.remove_after_drag = index == 1,
+            Field::DockEdge => settings.dock.edge = [DockEdge::Bottom, DockEdge::Top][index],
+            // (The dock's and the grid's are set on a slider, not chosen: see `set_slider`.)
+            Field::DockSize | Field::DockSpacing | Field::DockPeak | Field::DockClear | Field::PadCols | Field::PadRows => {}
         }
         self.save();
         match field {
@@ -3443,7 +3530,29 @@ impl Ui {
                 (name, sizes.0, most, STEP, value)
             }
             Field::OverlayClear => (pick(lang, "玻璃透明度", "Glass clarity"), 0.0, 1.0, 0.05, overlay.clear.clamp(0.0, 1.0)),
+            // The dock's own, in the units it is measured in: a tile's side and the room between them in DIPs, the
+            // swell as itself (1: not at all), the glass as how much of it is gone.
+            Field::DockSize => (pick(lang, "图标大小", "Icon size"), 24.0, 96.0, 2.0, self.settings.dock.size.clamp(24.0, 96.0)),
+            Field::DockSpacing => (pick(lang, "图标间距", "Room between icons"), 0.0, 40.0, 1.0, self.settings.dock.spacing.clamp(0.0, 40.0)),
+            Field::DockPeak => (pick(lang, "悬停放大", "Swell under the pointer"), 1.0, 2.2, 0.05, self.settings.dock.peak.clamp(1.0, 2.2)),
+            Field::DockClear => (pick(lang, "玻璃透明度", "Glass clarity"), 0.0, 1.0, 0.05, self.settings.dock.clear.clamp(0.0, 1.0)),
+            // (The launchpad's grid: tiles across a page, and rows of them, one at a step, 0 for the screen's own
+            // choice — the denser the ask, the smaller every tile comes out (see `crate::ui::launchpad`).)
+            Field::PadCols => (pick(lang, "每页列数", "Tiles across a page"), 0.0, 12.0, 1.0, self.settings.dock.pad_cols as f32),
+            Field::PadRows => (pick(lang, "每页行数", "Rows of tiles"), 0.0, 10.0, 1.0, self.settings.dock.pad_rows as f32),
             _ => (pick(lang, "大小", "Size"), sizes.0, sizes.1, 0.05, overlay.size.clamp(sizes.0, sizes.1)),
+        }
+    }
+
+    /// A slider's value, as its row says it: a share, except where the dock is measured in its own units.
+    fn slider_shown(&self, field: Field, value: f32) -> String {
+        match field {
+            Field::DockSize | Field::DockSpacing => format!("{value:.0} {}", pick(self.lang, "像素", "px")),
+            Field::DockPeak => format!("{value:.2}×"),
+            // (The launchpad's grid: none asked for is the screen's own choice, said rather than shown as a 0.)
+            Field::PadCols | Field::PadRows if value < 0.5 => pick(self.lang, "自动", "Automatic").to_string(),
+            Field::PadCols | Field::PadRows => format!("{value:.0}"),
+            _ => format!("{:.0}%", value * 100.0),
         }
     }
 
@@ -3520,6 +3629,41 @@ impl Ui {
                 p("拖出面板成为小组件", "Drag the panel off as a widget"),
                 Some(p("按住面板拖离屏幕边缘，即可将其放在桌面上", "Drag the panel away from the screen's edge to keep it on the desktop")),
                 self.settings.tear_off,
+            ),
+            Switch::DockOn => (
+                p("显示 Dock", "Show the dock"),
+                Some(p("沿屏幕边缘放一排图标：程序、文件、文件夹，以及监控、工作台、音乐、悬浮窗、设置与回收站", "A row of icons along the screen's edge: programs, files and folders, and the doors of the monitors, the workbench, what plays, the overlay and the settings, and the Recycle Bin")),
+                self.settings.dock.on,
+            ),
+            Switch::DockHide => (
+                p("自动隐藏", "Hide until the pointer comes"),
+                Some(p("鼠标移到它所在的那条屏幕边缘才出现，离开片刻后收起", "It comes out when the pointer reaches the screen's edge it stands at, and goes back in once the pointer has left")),
+                self.settings.dock.auto_hide,
+            ),
+            Switch::DockLock => (
+                p("锁定位置", "Hold it in place"),
+                Some(p("不能整条拖动图标栏改变位置或换到屏幕另一头；单个图标仍可拖动排序", "The bar cannot be dragged to another place or edge; a tile may still be dragged along the row")),
+                self.settings.dock.locked,
+            ),
+            Switch::DockThrough => (
+                p("点击穿透", "Clicks pass through"),
+                Some(p("Dock 不再接收鼠标点击。开启后无法在 Dock 上右键改回，请在此处关闭", "The dock takes no clicks. Once it is on, the dock's own menu cannot be opened to turn it back off — do it here")),
+                self.settings.dock.click_through,
+            ),
+            Switch::DockMagnify => (
+                p("悬停放大", "Swell under the pointer"),
+                Some(p("鼠标经边的图标放大，并带动相邻的图标", "The icon the pointer passes grows, and its neighbours with it")),
+                self.settings.dock.magnify,
+            ),
+            Switch::DockRunning => (
+                p("运行标记", "Dots under what is running"),
+                Some(p("已在运行的程序图标下方显示一个小圆点", "A small dot under the icon of what is running")),
+                self.settings.dock.running,
+            ),
+            Switch::DockShowOpen => (
+                p("显示已打开的窗口", "Show open windows"),
+                Some(p("已打开但未列入图标栏的程序也显示在末尾，点击可切换到其窗口", "Programs with a window open, kept nowhere on the row, are shown at its end; a press goes to their window")),
+                self.settings.dock.show_open,
             ),
             // Only a copy no ordinary program can replace (one the installer
             // put in Program Files) may start elevated unasked.
@@ -3617,6 +3761,13 @@ impl Ui {
         match switch {
             Switch::Live => settings.live_backdrop ^= true,
             Switch::TearOff => settings.tear_off ^= true,
+            Switch::DockOn => settings.dock.on ^= true,
+            Switch::DockHide => settings.dock.auto_hide ^= true,
+            Switch::DockLock => settings.dock.locked ^= true,
+            Switch::DockThrough => settings.dock.click_through ^= true,
+            Switch::DockMagnify => settings.dock.magnify ^= true,
+            Switch::DockRunning => settings.dock.running ^= true,
+            Switch::DockShowOpen => settings.dock.show_open ^= true,
             Switch::Updates => settings.check_updates ^= true,
             Switch::HeatAlert => settings.heat_alert ^= true,
             Switch::TrayHidden => settings.tray_hidden ^= true,
@@ -5297,7 +5448,7 @@ impl Ui {
                     let right = left + width - ROW_SIDE;
                     let track = Rect { x: right - SLIDER_VALUE - 12.0 - SLIDER_WIDTH, y, w: SLIDER_WIDTH, h: row_height };
                     text_centred(frame, name, label, palette.text, left + ROW_SIDE, cy, track.x - 12.0 - (left + ROW_SIDE), Align::Start);
-                    let shown = format!("{:.0}%", value * 100.0);
+                    let shown = self.slider_shown(field, value);
                     text_centred(frame, &shown, label, palette.text2, right - SLIDER_VALUE, cy, SLIDER_VALUE, Align::End);
                     let (start, end) = (track.x + SLIDER_THUMB, track.x + track.w - SLIDER_THUMB);
                     // (A slider whose most is its least, the screen holding no more than that: at its start.)
