@@ -33,6 +33,8 @@ pub enum Icon {
     Volume,
     Muted,
     LayoutGrid,
+    /// The launchpad's page of tiles (Lucide's grid-3x3).
+    Grid3x3,
     Gauge,
     ChevronDown,
     ChevronLeft,
@@ -273,6 +275,13 @@ impl Icon {
                 "M15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
                 "M15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
                 "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+            ],
+            Icon::Grid3x3 => &[
+                "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+                "M3 9h18",
+                "M3 15h18",
+                "M9 3v18",
+                "M15 3v18",
             ],
             Icon::Gauge => &["m12 14 4-4", "M3.34 19a10 10 0 1 1 17.32 0"],
             Icon::ChevronDown => &["m6 9 6 6 6-6"],
