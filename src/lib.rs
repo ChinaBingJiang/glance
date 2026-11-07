@@ -83,6 +83,16 @@ mod library;
 #[cfg(windows)]
 mod sound;
 #[cfg(windows)]
+pub mod wifi;
+#[cfg(windows)]
+pub mod bluetooth;
+#[cfg(windows)]
+pub mod network;
+#[cfg(windows)]
+pub mod sys;
+#[cfg(windows)]
+pub mod audio;
+#[cfg(windows)]
 mod cover;
 #[cfg(windows)]
 mod fullscreen;
@@ -357,6 +367,14 @@ pub(crate) fn show_reports(place: Option<windows::Win32::Foundation::RECT>) {
     ui::settings_window::open_at_reports(place);
 }
 
+/// The card about this PC: a small window of its own, raised from any thread (see `ui::about`).
+/// `place` is taken for the call's shape (the tray's icon place); the card centres itself.
+#[cfg(windows)]
+pub(crate) fn show_about(place: Option<windows::Win32::Foundation::RECT>) {
+    app().controller.dismiss();
+    ui::about::open(place);
+}
+
 /// The settings shown at the workbench's page (the station's choices are there), poured out of `place`.
 pub(crate) fn show_workbench_settings(place: Option<windows::Win32::Foundation::RECT>) {
     app().controller.dismiss();
@@ -571,6 +589,8 @@ pub fn run() {
     notes::follow_settings(&app().settings.lock().unwrap());
     station::recent::follow_settings(&app().settings.lock().unwrap());
     notes::start(|| app().controller.wake());
+    // Screen time: the frontmost program tallied to a day, watched on its own thread (see `ui::screen_time`).
+    ui::screen_time::start();
     // The phone remote, if it is on: running from now, whatever stopped it.
     thread::Builder::new().name("glance: phone remote".into()).spawn(phone::keep).expect("a thread started");
     // What touches the PC while the phone remote has the screens out, heard for it.

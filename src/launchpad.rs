@@ -416,6 +416,9 @@ impl Launchpad {
         self.pad = (settings.pad_cols, settings.pad_rows);
         self.dock_room = overhang(settings.measures().0, settings.peak()).1;
         self.look_at();
+        // (The shell's read taken again in the background: a program installed since the last look comes in when it
+        //  lands, the tick folding it in. Never waited for, so the page still comes up at once on what was read before.)
+        found::look(|| {});
         self.names(settings);
         {
             let mut words = self.words.borrow_mut();

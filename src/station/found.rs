@@ -54,7 +54,12 @@ pub fn look(told: impl Fn() + Send + 'static) {
                 unsafe { windows::Win32::System::Com::CoUninitialize() };
             }
             if let Some(found) = found {
-                *FOUND.lock().unwrap() = Some(Arc::new(found));
+                // (A fresh look that came back empty, while a good list is already held, is taken as the shell being
+                //  slow rather than truly bare: the list kept rather than wiped.)
+                let keep = found.is_empty() && all().is_some_and(|was| !was.is_empty());
+                if !keep {
+                    *FOUND.lock().unwrap() = Some(Arc::new(found));
+                }
             }
             LOOKING.store(false, Ordering::Release);
             told();

@@ -4,6 +4,8 @@
 
 pub mod arrange;
 #[cfg(windows)]
+pub mod about;
+#[cfg(windows)]
 pub mod backdrop;
 pub mod beside;
 pub mod buttons;
@@ -38,6 +40,8 @@ pub mod seen;
 #[cfg(windows)]
 pub mod render;
 pub mod scene;
+#[cfg(windows)]
+pub mod screen_time;
 #[cfg(windows)]
 pub(crate) mod ask;
 pub(crate) mod picture;

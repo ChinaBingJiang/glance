@@ -155,6 +155,18 @@ const DEVICE_RETRY: Duration = Duration::from_millis(250);
 /// beyond one interval, as the panel's does.
 const PEN_LAG_MS: f64 = 100.0;
 
+/// The accent colours offered on chips: RGB, Chinese name, English name.
+const ACCENTS: [(u32, &str, &str); 8] = [
+    (0x0078D4, "蓝", "Blue"),
+    (0xF7630C, "橙", "Orange"),
+    (0xE81123, "红", "Red"),
+    (0x16C60C, "绿", "Green"),
+    (0x8E44AD, "紫", "Purple"),
+    (0xE3008C, "粉", "Pink"),
+    (0x00B7C3, "青", "Teal"),
+    (0xFFD200, "黄", "Yellow"),
+];
+
 /// How long the diagnostics' button says they were copied.
 const COPIED_FOR: Duration = Duration::from_secs(2);
 
@@ -744,6 +756,13 @@ fn tick(now: Instant) -> Option<Duration> {
             ui.relabel();
         }
         ui.follow_when_free();
+        // Wallpaper thumbnails arriving on the Appearance page: repaint.
+        if ui.page == Page::Appearance {
+            let seen = crate::station::thumbs::changes();
+            if seen != ui.theme_thumbs {
+                ui.next_frame = now;
+            }
+        }
         if now >= ui.next_frame {
             ui.draw(now);
         }
@@ -986,20 +1005,66 @@ enum Page {
     Launchpad,
     Music,
     Phone,
+    // ---- System pages (OS category) ----
     /// A page of the machine's own settings: its date, time and zone.
     DateTime,
-    /// The machine's own pages Glance only opens where Windows keeps them (see `Row::Do`).
+    /// The system's own look: its theme, mode, animation, transparency and accent.
+    Appearance,
+    /// Wi-Fi: scanning, connecting, known networks.
+    Wifi,
+    /// Bluetooth: adapters, paired devices, nearby scan.
+    Bluetooth,
+    /// The machine's pages Glance opens where Windows keeps them (see `Row::Do`).
     Display,
     Sound,
     Network,
+    /// Power & battery: plan, sleep, screen timeout.
+    Power,
+    /// Focus / Do Not Disturb.
+    Focus,
     Notifications,
+    /// Screen time: daily usage per app.
+    ScreenTime,
+    /// Keyboard & mouse settings.
+    Input,
+    /// Accessibility: contrast, text size, cursor.
+    Accessibility,
     Storage,
+    /// Control centre / quick settings.
+    ControlCenter,
+    /// Desktop & taskbar settings.
+    Desktop,
+    /// Wallpaper picker.
+    Wallpaper,
     Privacy,
+    /// User account: lock screen, info.
+    Account,
     Gaming,
-    WindowsUpdate,
+    /// About this PC: device specs.
+    About,
     General,
     /// The reports this PC sent, as threads: a page of General's, opened from it (see `Row::MyReports`).
     Reports,
+    // ---- The 通用 hub's sub-items (see `Page::System`) ----
+    /// The 通用 hub itself: a macOS page of sub-items, each showing its preview on the right
+    /// without turning to it (see `Target::Preview`).
+    System,
+    /// Software update, as the hub names it: what WindowsUpdate's page keeps, told as macOS does.
+    Update,
+    /// Login items: what starts of its own accord at sign-in.
+    Startup,
+    /// Accessibility, as the hub names it: `Accessibility`'s page under its macOS word.
+    Access,
+    /// Language & region: the formats and the languages the machine keeps.
+    Language,
+    /// Nearby sharing: AirDrop and Handoff's Windows kin.
+    Nearby,
+    /// Sharing: the network and sharing centre.
+    Sharing,
+    /// Backup: file history, whether it is set.
+    Backup,
+    /// Recovery: the startup disk, and the environment to boot into.
+    Recovery,
 }
 
 /// The monitor's settings, a group to a tab: what it shows, how it reads and warns, and its overlay.
@@ -1027,11 +1092,21 @@ impl Tab {
 enum NavItem {
     Page(Page),
     Components,
-    /// The heading over the machine's own settings pages.
+    /// The heading over the connecting pages: Wi-Fi, Bluetooth, network.
+    Connect,
+    /// The heading over the machine's own system pages.
     System,
+    /// The heading over the personalisation pages.
+    Personalise,
+    /// The heading over the input and accessibility pages.
+    Ease,
+    /// The heading over the storage and privacy pages.
+    Secure,
+    /// The heading over the accounts, updates and about pages.
+    More,
 }
 
-const NAV_ITEMS: [NavItem; 20] = [
+const NAV_ITEMS: [NavItem; 37] = [
     NavItem::Page(Page::Layout),
     NavItem::Page(Page::Look),
     NavItem::Components,
@@ -1042,16 +1117,33 @@ const NAV_ITEMS: [NavItem; 20] = [
     NavItem::Page(Page::Music),
     NavItem::Page(Page::Phone),
     NavItem::Page(Page::General),
+    NavItem::Connect,
+    NavItem::Page(Page::Wifi),
+    NavItem::Page(Page::Bluetooth),
+    NavItem::Page(Page::Network),
     NavItem::System,
-    NavItem::Page(Page::DateTime),
     NavItem::Page(Page::Display),
     NavItem::Page(Page::Sound),
-    NavItem::Page(Page::Network),
+    NavItem::Page(Page::Power),
     NavItem::Page(Page::Notifications),
+    NavItem::Page(Page::Focus),
+    NavItem::Page(Page::ScreenTime),
+    NavItem::Personalise,
+    NavItem::Page(Page::Appearance),
+    NavItem::Page(Page::Wallpaper),
+    NavItem::Page(Page::Desktop),
+    NavItem::Ease,
+    NavItem::Page(Page::Input),
+    NavItem::Page(Page::Accessibility),
+    NavItem::Secure,
     NavItem::Page(Page::Storage),
     NavItem::Page(Page::Privacy),
+    NavItem::More,
+    NavItem::Page(Page::Account),
+    NavItem::Page(Page::System),
     NavItem::Page(Page::Gaming),
-    NavItem::Page(Page::WindowsUpdate),
+    NavItem::Page(Page::DateTime),
+    NavItem::Page(Page::ControlCenter),
 ];
 
 impl NavItem {
@@ -1060,6 +1152,11 @@ impl NavItem {
             NavItem::Page(Page::Layout) => pick(lang, "布局", "Layout"),
             NavItem::Page(Page::Look) => pick(lang, "外观", "Appearance"),
             NavItem::Components => pick(lang, "组件", "Components"),
+            NavItem::Connect => pick(lang, "网络与连接", "Network & connect"),
+            NavItem::Personalise => pick(lang, "个性化", "Personalisation"),
+            NavItem::Ease => pick(lang, "输入与辅助", "Input & accessibility"),
+            NavItem::Secure => pick(lang, "存储与隐私", "Storage & privacy"),
+            NavItem::More => pick(lang, "账户与更多", "Accounts & more"),
             NavItem::Page(Page::Monitor) => pick(lang, "监控", "Monitor"),
             NavItem::Page(Page::Workbench) => pick(lang, "工作台", "Workbench"),
             NavItem::Page(Page::Dock) => "Dock",
@@ -1067,7 +1164,8 @@ impl NavItem {
             NavItem::Page(Page::Music) => pick(lang, "音乐", "Music"),
             NavItem::Page(Page::Phone) => pick(lang, "手机互联", "Phone"),
             NavItem::Page(Page::DateTime) => pick(lang, "时间与语言", "Time & Language"),
-            NavItem::Page(Page::General | Page::Reports) => pick(lang, "通用", "General"),
+            NavItem::Page(Page::Appearance) => pick(lang, "系统外观", "System Appearance"),
+            NavItem::Page(Page::General | Page::Reports) => pick(lang, "Glance", "Glance"),
             NavItem::System => pick(lang, "系统", "System"),
             NavItem::Page(Page::Display) => pick(lang, "显示", "Display"),
             NavItem::Page(Page::Sound) => pick(lang, "声音", "Sound"),
@@ -1076,7 +1174,27 @@ impl NavItem {
             NavItem::Page(Page::Storage) => pick(lang, "存储", "Storage"),
             NavItem::Page(Page::Privacy) => pick(lang, "隐私和安全性", "Privacy & security"),
             NavItem::Page(Page::Gaming) => pick(lang, "游戏", "Gaming"),
-            NavItem::Page(Page::WindowsUpdate) => pick(lang, "Windows 更新", "Windows Update"),
+            NavItem::Page(Page::Wifi) => pick(lang, "WLAN", "Wi-Fi"),
+            NavItem::Page(Page::Bluetooth) => pick(lang, "蓝牙", "Bluetooth"),
+            NavItem::Page(Page::Power) => pick(lang, "电源与电池", "Power & battery"),
+            NavItem::Page(Page::Focus) => pick(lang, "专注模式", "Focus"),
+            NavItem::Page(Page::ScreenTime) => pick(lang, "屏幕使用时间", "Screen time"),
+            NavItem::Page(Page::Input) => pick(lang, "键盘和鼠标", "Keyboard & mouse"),
+            NavItem::Page(Page::Accessibility) => pick(lang, "辅助功能", "Accessibility"),
+            NavItem::Page(Page::Desktop) => pick(lang, "桌面和任务栏", "Desktop & taskbar"),
+            NavItem::Page(Page::Wallpaper) => pick(lang, "个性化壁纸", "Wallpaper"),
+            NavItem::Page(Page::ControlCenter) => pick(lang, "快速设置", "Quick settings"),
+            NavItem::Page(Page::Account) => pick(lang, "账户", "Accounts"),
+            NavItem::Page(Page::System) => pick(lang, "通用", "General"),
+            NavItem::Page(Page::Update) => pick(lang, "软件更新", "Software Update"),
+            NavItem::Page(Page::Startup) => pick(lang, "登录项", "Login Items"),
+            NavItem::Page(Page::Access) => pick(lang, "辅助功能", "Accessibility"),
+            NavItem::Page(Page::Language) => pick(lang, "语言与地区", "Language & Region"),
+            NavItem::Page(Page::Nearby) => pick(lang, "隔空投送与接力（就近共享）", "AirDrop & Handoff (nearby sharing)"),
+            NavItem::Page(Page::Sharing) => pick(lang, "共享", "Sharing"),
+            NavItem::Page(Page::Backup) => pick(lang, "时间机器（Windows 备份）", "Time Machine (Windows Backup)"),
+            NavItem::Page(Page::Recovery) => pick(lang, "启动磁盘（恢复）", "Startup Disk (recovery)"),
+            NavItem::Page(Page::About) => pick(lang, "关于本机", "About this PC"),
         }
     }
 
@@ -1094,6 +1212,7 @@ impl Page {
             Page::Music => Icon::Music,
             Page::Phone => Icon::Smartphone,
             Page::DateTime => Icon::Clock,
+            Page::Appearance => Icon::Brush,
             Page::Display => Icon::AppWindow,
             Page::Sound => Icon::Volume,
             Page::Network => Icon::Network,
@@ -1101,8 +1220,28 @@ impl Page {
             Page::Storage => Icon::Disk,
             Page::Privacy => Icon::Shield,
             Page::Gaming => Icon::Game,
-            Page::WindowsUpdate => Icon::Update,
+            Page::Wifi => Icon::Wifi,
+            Page::Bluetooth => Icon::Bluetooth,
+            Page::Power => Icon::Battery,
+            Page::Focus => Icon::Moon,
+            Page::ScreenTime => Icon::Timer,
+            Page::Input => Icon::Keyboard,
+            Page::Accessibility => Icon::Eye,
+            Page::Desktop => Icon::LayoutDashboard,
+            Page::Wallpaper => Icon::Image,
+            Page::ControlCenter => Icon::Sliders,
+            Page::Account => Icon::User,
+            Page::About => Icon::Info,
             Page::General | Page::Reports => Icon::Settings,
+            Page::System => Icon::Settings,
+            Page::Update => Icon::Update,
+            Page::Startup => Icon::ArrowDownToLine,
+            Page::Access => Icon::CircleDot,
+            Page::Language => Icon::Sliders,
+            Page::Nearby => Icon::Network,
+            Page::Sharing => Icon::Link,
+            Page::Backup => Icon::Folder,
+            Page::Recovery => Icon::Wrench,
         }
     }
 
@@ -1110,6 +1249,22 @@ impl Page {
         match self {
             Page::Reports => pick(lang, "我的反馈", "My reports"),
             page => NavItem::Page(page).name(lang),
+        }
+    }
+
+    /// The 通用 hub's own way of naming a sub-item: the macOS word for the pages
+    /// that live only in its right-hand pane (see `Page::System`).
+    fn hub_name(self, lang: Lang) -> &'static str {
+        match self {
+            Page::Update => pick(lang, "软件更新", "Software Update"),
+            Page::Startup => pick(lang, "登录项", "Login Items"),
+            Page::Access => pick(lang, "辅助功能", "Accessibility"),
+            Page::Language => pick(lang, "语言与地区", "Language & Region"),
+            Page::Nearby => pick(lang, "隔空投送与接力", "AirDrop & Handoff"),
+            Page::Sharing => pick(lang, "共享", "Sharing"),
+            Page::Backup => pick(lang, "时间机器", "Time Machine"),
+            Page::Recovery => pick(lang, "启动磁盘", "Startup Disk"),
+            page => page.name(lang),
         }
     }
 }
@@ -1162,6 +1317,35 @@ enum Field {
     /// The launchpad's grid, slid: tiles across a page, and rows of them, 0 as the screen chooses (see `crate::launchpad`).
     PadCols,
     PadRows,
+    /// The system's light/dark mode.
+    SystemTheme,
+    /// The accent colour.
+    Accent,
+    // ---- System settings pages (OS category) ----
+    /// The power plan: best performance, balanced, power saver.
+    PowerPlan,
+    /// The screen's turn-off delay, slid in minutes.
+    ScreenOff,
+    /// The machine's sleep delay, slid in minutes.
+    Sleep,
+    /// A key's hold before it repeats, slid on Windows' 0-3 scale.
+    KeyDelay,
+    /// How fast a key repeats, slid on Windows' 0-31 scale.
+    KeyRate,
+    /// The pointer's speed, slid 0-20.
+    MouseSpeed,
+    /// The wheel's lines at a notch.
+    ScrollLines,
+    /// The text scale, slid in per cent.
+    TextSize,
+    /// The pointer's size, slid 1-15.
+    CursorSize,
+    /// The taskbar's edge.
+    TaskbarPosition,
+    /// How taskbar buttons combine.
+    CombineIcons,
+    /// How the wallpaper fills the screen.
+    WallpaperStyle,
 }
 
 /// How a button looks: outlined; filled in the accent (the one thing to
@@ -1322,6 +1506,31 @@ enum Switch {
     /// Whether the clock runs 24-hour, and shows seconds: the machine's own, read live (see `system_settings`).
     Clock24,
     Seconds,
+    /// The system's own switches: animation, transparency, accent on borders.
+    AnimOn,
+    Glass,
+    AccentOn,
+    // ---- System settings pages (OS category) ----
+    /// The wireless radio, on or off.
+    WifiOn,
+    /// The Bluetooth adapter, enabled or disabled.
+    BluetoothOn,
+    /// Do Not Disturb, on or off.
+    FocusOn,
+    /// Whether notices may still show above the lock screen.
+    FocusLock,
+    /// High contrast, on or off.
+    HighContrast,
+    /// The taskbar hiding until the pointer comes.
+    TaskbarAutohide,
+    /// The taskbar's small icons.
+    TaskbarSmall,
+    /// The lock screen when the PC wakes.
+    LockScreen,
+    /// Game Mode taking over automatically.
+    GameMode,
+    /// The Game DVR background recording.
+    GameDvr,
 }
 
 /// What a QR code shown is for.
@@ -1379,6 +1588,16 @@ enum Target {
     Same,
     /// A page, in the pages' list.
     Nav(Page),
+    /// On the 通用 hub: the sub-item whose preview to show on the right, without
+    /// turning to its page (see `pick_preview`).
+    Preview(Page),
+    /// Nearby sharing let on to this user's devices, or off again.
+    Nearby(bool),
+    /// A restart into the recovery environment (true) or the firmware setup.
+    RebootTo(bool),
+    /// One of the machine's own login items let run (true) or held, the hive it is
+    /// kept in and the name the registry holds it under.
+    Startup(bool, String, bool),
     /// One of the monitor's tabs.
     Tab(Tab),
     /// One of what plays shows (see `Row::Element`).
@@ -1419,6 +1638,65 @@ enum Target {
     /// again to load it.
     NetEase(NetEaseWork),
     NetEaseRestart,
+    /// Picks a theme in the preview gallery (index into themes()).
+    ThemePick(usize),
+    /// Confirms the picked theme: wears it.
+    ThemeConfirm,
+    // ---- System settings pages (OS category) ----
+    /// Joins a wireless network kept before, by its profile name.
+    WifiJoin(String),
+    /// Joins a network new to this PC, by its name; the key is asked first.
+    WifiAsk(String),
+    /// Forgets a wireless network, by its profile name.
+    WifiForget(String),
+    /// Drops the network joined now, without forgetting it.
+    WifiDisconnect,
+    /// Shows or hides the key of the network joined now.
+    WifiKey,
+    /// Picks a network to show in the preview, by its name.
+    WifiSelect(String),
+    /// Puts a wallpaper file on the desktop, by its path.
+    SetWallpaper(String),
+    /// Asks Windows to pair a Bluetooth device, by its name.
+    BtPair(String),
+    /// Picks a Bluetooth device to show in the preview, by its address.
+    BtSelect(String),
+    /// Picks a network adapter to show in the preview, by its name.
+    NetSelect(String),
+    /// Picks a display to show in the preview, by its GDI name.
+    ScreenSelect(String),
+    /// Picks a physical disk to show its volumes in the preview, by its number.
+    StorageSelect(u32),
+    /// Tells a display to wear a mode: its size and rate.
+    ModeApply { device: String, wide: u32, tall: u32, hz: u32 },
+    /// Warms the screen to a depth of the night light (0 to wash it off).
+    NightSet(u32),
+    /// Crowns a display as the one things start on.
+    SetPrimary(String),
+    /// Turns a display: none, a quarter right, upside down, or a quarter left.
+    RotateSet { device: String, orient: u32 },
+    /// Picks a sound device to show in the preview, by its id.
+    AudioSelect(String),
+    /// Puts a sound device's volume, as a percent.
+    AudioVolume { id: String, percent: u32 },
+    /// Mutes or unmutes a sound device.
+    AudioMute { id: String, muted: bool },
+    /// Picks an app to show in the notification preview, by its id.
+    NotifySelect(String),
+    /// Lets or holds one app's banners.
+    NotifyToggle { aumid: String, on: bool },
+    /// Puts the master switch on notices, letting them or holding them all.
+    NotifyMaster(bool),
+    /// The temporary files cleared as far as they can be.
+    CleanTemp,
+    /// The recycle bin emptied.
+    EmptyRecycle,
+    /// Storage sense put on or off.
+    StorageSenseApply(bool),
+    /// Picks an app to show in the privacy preview: the capability its row sits under, and its name.
+    ConsentSelect(String, String),
+    /// Lets or holds one app's use of a capability.
+    ConsentSet { capability: String, keys: Vec<String>, packaged: bool, allow: bool },
 }
 
 /// How what was done to NetEase Cloud Music's lyrics plugin went: done, with whether the loader is Glance's now
@@ -1502,8 +1780,33 @@ enum Row {
     /// A door to one of Windows' own pages: a row with a button that opens
     /// what Glance cannot set here (see `Do`).
     Do(Do),
+    /// A row that leads somewhere else in this window: (its name in Chinese and
+    /// in English, a word under it in Chinese and in English, and what pressing
+    /// it does). Its whole card is what gets pressed, and a chevron stands where
+    /// a button would — the name is told once, not echoed back as the button's
+    /// word. The 通用 hub's rows use it to show another page's preview.
+    Nav(&'static str, &'static str, &'static str, &'static str, Target),
     /// NetEase Cloud Music's lyrics plugin (InfLink-rs): how it is, and installing or taking it back.
     NetEase,
+    /// A wireless network near, on the WLAN page's left: its name and profile, signal, and whether it is secured,
+    /// joined, or kept.
+    WifiNet(String, String, u32, bool, bool, bool),
+    /// A Bluetooth device, on the Bluetooth page's left: its name and address, and whether it is paired or in touch.
+    BtDevice(String, String, bool, bool),
+    /// A network adapter, on the Network page's left: its name, and whether it is up, and whether the internet
+    /// leaves by this one.
+    NetAdapter(String, bool, bool),
+    /// A display, on the Display page's left: its GDI name, and whether things start on it.
+    Screen(String, bool),
+    /// A sound device, on the Sound page's left: its id, its name, and whether it is the default for its kind.
+    AudioDevice(String, String, bool),
+    /// An app with a notification setting, on the Notifications page's left: its name, its id, and whether it is let now.
+    NotifyApp(String, String, bool),
+    /// An app's consent for a capability, on the Privacy page's left: the capability it sits under,
+    /// its name, and whether it is let now.
+    ConsentApp(String, String, bool),
+    /// A physical disk, on the Storage page's left: its number, its model, and the room it holds.
+    Disk(u32, String, u64),
 }
 
 /// How tall a group's name is, above its rows.
@@ -1517,6 +1820,23 @@ const TAB_MARK_LEADS: (Duration, Easing) = (Duration::from_millis(200), Easing(0
 const TAB_MARK_TRAILS: (Duration, Easing) = (Duration::from_millis(360), Easing(0.55, 0.55, 0.0, 1.0));
 /// How tall the code's own square is, in its row.
 const CODE: f32 = 176.0;
+
+/// A byte count spoken as the shell would: the largest unit it fills, one figure where it is past
+/// whole bytes.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[0])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
+    }
+}
 
 /// A module row being dragged: by how far below the row's top it was
 /// taken, and where the pointer is (document DIPs).
@@ -1678,6 +1998,21 @@ struct Ui {
     /// The page shown, and the monitor's tab (shown on its page).
     page: Page,
     tab: Tab,
+    /// On the 通用 hub, the sub-item whose preview the right pane shows; none till
+    /// one is picked (see `Target::Preview`).
+    preview: Option<Page>,
+    /// The 通用 hub's right pane scrolled when its sub-item's cards outgrow it, eased
+    /// as the list's own is. `hub_most` is how far it may go, told by `hub_tall`: the
+    /// height the pane's cards are laid out to.
+    hub_scroll: f32,
+    hub_scroll_target: f32,
+    hub_tall: f32,
+    /// The lowest point the hub's cards reached as they were laid out (a window
+    /// coordinate, told by `grouped_card` and `switch_card`; see `hub_tall`).
+    drawn: f32,
+    /// How far the sentence under a hub's last card is told to run: the cards know
+    /// where they end, the wrapped words do not say it back (see `hub_tall`).
+    hanging: f32,
     /// The players music can be followed from, as the music page offers them (as Windows identifies each, and its
     /// name): those playing music now, and the one chosen, playing or not; taken anew each frame.
     sources: Vec<(String, String)>,
@@ -1778,6 +2113,25 @@ struct Ui {
     /// The nav column's own scroll, eased as the list's is and held at 0 while its items fit the window.
     nav_scroll: f32,
     nav_scroll_target: f32,
+    /// Which theme is picked for preview (None = the worn theme; set on a chip click, cleared on confirm).
+    theme_picked: Option<usize>,
+    /// The thumbs::changes() counter at last paint: repaint the appearance preview when new wallpaper thumbs arrive.
+    theme_thumbs: u64,
+    /// The key of the network joined now, shown in the WLAN preview once asked (None = hidden).
+    wifi_key: Option<String>,
+    /// The network picked to show in the WLAN preview, by its name (None = the one joined now).
+    wifi_selected: Option<String>,
+    /// The Bluetooth device picked to show in its preview, by its address (None = the first paired).
+    bt_selected: Option<String>,
+    /// The network adapter picked to show in its preview, by its name (None = the one in use).
+    net_selected: Option<String>,
+    display_selected: Option<String>,
+    /// The physical disk picked to show its volumes in the storage preview, by its number (None = the first).
+    storage_selected: Option<u32>,
+    audio_selected: Option<String>,
+    notify_selected: Option<String>,
+    /// The privacy capability whose app list is shown, as Windows names it in the consent store.
+    privacy_capability: String,
     motion: HashMap<String, Transition>,
     /// Thumbs land where they belong without sliding (after relabelling).
     settle_thumbs: bool,
@@ -1998,6 +2352,12 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             prefs,
             page: Page::Layout,
             tab: Tab::Shown,
+            preview: None,
+            hub_scroll: 0.0,
+            hub_scroll_target: 0.0,
+            hub_tall: 0.0,
+            drawn: 0.0,
+            hanging: 0.0,
             sources: Vec::new(),
             music: super::music::Music::default(),
             music_ground: render::GroundLayers::default(),
@@ -2050,6 +2410,17 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             scroll_target: 0.0,
             nav_scroll: 0.0,
             nav_scroll_target: 0.0,
+            theme_picked: None,
+            theme_thumbs: 0,
+            wifi_key: None,
+            wifi_selected: None,
+            bt_selected: None,
+            net_selected: None,
+            display_selected: None,
+            storage_selected: None,
+            audio_selected: None,
+            notify_selected: None,
+            privacy_capability: "Location".into(),
             motion: HashMap::new(),
             settle_thumbs: true,
             by_hand: false,
@@ -2203,7 +2574,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         // (Measuring: a page, and a tab of the monitor's, turned to as a press on it turns to it; see `perf`.)
         PERF_TURN if crate::perf::on() => {
-            const PAGES: [Page; 10] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Dock, Page::Launchpad, Page::Music, Page::Phone, Page::DateTime, Page::General];
+            const PAGES: [Page; 11] = [Page::Layout, Page::Look, Page::Monitor, Page::Workbench, Page::Dock, Page::Launchpad, Page::Music, Page::Phone, Page::DateTime, Page::Appearance, Page::General];
             const TABS: [Tab; 3] = [Tab::Shown, Tab::Data, Tab::Overlay];
             with_ui(|ui| {
                 crate::perf::mark(|| format!("settings turn {} {}", wparam.0, lparam.0));
@@ -2424,6 +2795,46 @@ fn pick(lang: Lang, zh: &'static str, en: &'static str) -> &'static str {
     lang.pick(zh, en)
 }
 
+/// The last `count` samples' network rates (bytes a second), oldest first, from the
+/// controller's live history; a sample that read none stands as 0, the line flat where
+/// nothing moved.
+fn net_series(count: usize) -> (Vec<f64>, Vec<f64>) {
+    let history = crate::app().controller.history.read().unwrap();
+    let recent = history.len().saturating_sub(count);
+    let down = history.iter().skip(recent).map(|s| s.net_down.unwrap_or(0.0)).collect();
+    let up = history.iter().skip(recent).map(|s| s.net_up.unwrap_or(0.0)).collect();
+    (down, up)
+}
+
+/// A link's rate, of the bits a second its driver says: whole gigabits where it
+/// reaches them, else megabits, else what the driver had to give. Nothing told
+/// for a link that stands still.
+fn net_rate(bps: u64) -> String {
+    let m = bps as f64 / 1_000_000.0;
+    if bps == 0 {
+        String::from("—")
+    } else if m >= 1000.0 {
+        format!("{:.1} Gbps", m / 1000.0)
+    } else if m >= 1.0 {
+        format!("{m:.0} Mbps")
+    } else {
+        format!("{:.0} Kbps", m * 1000.0)
+    }
+}
+
+/// The newest sample's battery, where the history holds one.
+fn battery_latest() -> Option<crate::reading::BatterySample> {
+    crate::app().controller.history.read().unwrap().back().and_then(|s| s.battery.clone())
+}
+
+/// The last `count` samples' battery charge (percent), oldest first; samples without a
+/// battery go unshown, so this is empty while the machine runs on mains.
+fn battery_series(count: usize) -> Vec<f32> {
+    let history = crate::app().controller.history.read().unwrap();
+    let recent = history.len().saturating_sub(count);
+    history.iter().skip(recent).filter_map(|s| s.battery.as_ref().map(|b| b.percent as f32)).collect()
+}
+
 impl Ui {
     /// Asked to close: poured into the place it was asked from where that is still seen, else into Glance's icon in the
     /// tray (see `genie::back_into`), hidden meanwhile, and closed once it has.
@@ -2602,7 +3013,7 @@ impl Ui {
             }
             (Page::General, _) => {
                 rows.push(Row::Choice(Field::Language));
-                rows.push(Row::Group(pick(self.lang, "系统", "System")));
+                rows.push(Row::Group("Glance"));
                 // The switches together, then the buttons.
                 rows.extend([Row::Switch(Switch::Startup), Row::Switch(Switch::TrayHidden), Row::Switch(Switch::Updates), Row::Version]);
                 if update::available().is_some() {
@@ -2645,52 +3056,416 @@ impl Ui {
                     what: Target::Open("ms-settings:regionlanguage".into()),
                 }));
             }
-            (Page::Display, _) => rows.push(Row::Do(Do {
-                name: ("显示设置", "Display settings"),
-                word: ("分辨率、方向、缩放与多屏排列均由系统设置", "Resolution, orientation, scaling, and how the screens lie are set here by Windows"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:display".into()),
-            })),
-            (Page::Sound, _) => rows.push(Row::Do(Do {
-                name: ("输出与音量", "Output and volume"),
-                word: ("选择声音播放的设备并调它的音量", "Pick the device sound plays through, and set its volume"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:sound".into()),
-            })),
-            (Page::Network, _) => rows.extend([
-                Row::Do(Do { name: ("WLAN", "Wi-Fi"), word: ("连上无线网，看存过的网络", "Join a wireless network and see the ones saved"), button: ("打开", "Open"), what: Target::Open("ms-settings:network-wifi".into()) }),
-                Row::Do(Do { name: ("网络状态", "Network status"), word: ("本机连接、地址与用量", "This PC's connections, its addresses, and its usage"), button: ("打开", "Open"), what: Target::Open("ms-settings:network-status".into()) }),
-            ]),
-            (Page::Notifications, _) => rows.push(Row::Do(Do {
-                name: ("通知和勿扰", "Notifications and do not disturb"),
-                word: ("哪些应用可打扰你，横幅与锁屏怎样显示", "Which apps may reach you, and how banners and the lock screen show them"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:notifications".into()),
-            })),
-            (Page::Storage, _) => rows.push(Row::Do(Do {
-                name: ("存储", "Storage"),
-                word: ("各盘的用量、临时文件与存储感知", "How full each drive is, temporary files, and Storage Sense"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:storagesense".into()),
-            })),
-            (Page::Privacy, _) => rows.push(Row::Do(Do {
-                name: ("隐私和安全性", "Privacy & security"),
-                word: ("位置、相机、麦克风等权限总览", "Location, camera, microphone, and the rest of the permissions"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:privacy".into()),
-            })),
-            (Page::Gaming, _) => rows.push(Row::Do(Do {
-                name: ("游戏", "Gaming"),
-                word: ("Xbox Game Bar、它的录制与游戏模式", "Xbox Game Bar, its recording, and Game Mode"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:gaming-gamebar".into()),
-            })),
-            (Page::WindowsUpdate, _) => rows.push(Row::Do(Do {
-                name: ("Windows 更新", "Windows Update"),
-                word: ("检查更新与查看更新历史由系统进行", "Checking for updates and reading their history is the system's to do"),
-                button: ("打开", "Open"),
-                what: Target::Open("ms-settings:windowsupdate".into()),
-            })),
+            // The system's own look: its theme, mode, animation, transparency, and accent.
+            (Page::Appearance, _) => {
+                let lang = self.lang;
+                let current = super::system_settings::theme_choices().1
+                    .and_then(|i| super::system_settings::themes().get(i).map(|(n, _)| n.clone()))
+                    .unwrap_or_else(|| pick(lang, "未保存", "Unsaved").to_string());
+                rows.extend([
+                    Row::Group(pick(lang, "系统的外观", "The system's own")),
+                    Row::Info(format!("{} · {}", pick(lang, "当前主题", "Current theme"), current)),
+                    Row::Choice(Field::SystemTheme),
+                    Row::Switch(Switch::AnimOn),
+                    Row::Switch(Switch::Glass),
+                    Row::Switch(Switch::AccentOn),
+                    Row::Choice(Field::Accent),
+                ]);
+            }
+            (Page::Display, _) => {
+                let lang = self.lang;
+                // The machine's screens down the left; the picked one's modes, scale and night light to the right.
+                rows.push(Row::Group(pick(lang, "显示器", "Displays")));
+                if self.screens.is_empty() {
+                    rows.push(Row::Info(pick(lang, "没有读到显示器", "No display was read").to_string()));
+                } else {
+                    rows.extend(self.screens.iter().map(|s| Row::Screen(crate::sys::device_of(&s.monitor), s.primary)));
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的显示设置", "Windows' display settings"),
+                    word: ("方向、亮度、HDR 与多屏排列由系统进行", "Orientation, brightness, HDR, and how the screens lie are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:display".into()),
+                }));
+            }
+            (Page::Sound, _) => {
+                let lang = self.lang;
+                // The machine's sound devices down the left, each way round; the picked one's volume and mute to the right.
+                match crate::audio::snapshot() {
+                    Some(shot) if !shot.devices.is_empty() => {
+                        rows.push(Row::Group(pick(lang, "输出", "Output")));
+                        let mut out = false;
+                        for d in shot.devices.iter().filter(|d| d.render) {
+                            rows.push(Row::AudioDevice(d.id.clone(), d.name.clone(), d.default));
+                            out = true;
+                        }
+                        if !out {
+                            rows.push(Row::Info(pick(lang, "没有播放设备", "No output device").to_string()));
+                        }
+                        rows.push(Row::Group(pick(lang, "输入", "Input")));
+                        let mut inn = false;
+                        for d in shot.devices.iter().filter(|d| !d.render) {
+                            rows.push(Row::AudioDevice(d.id.clone(), d.name.clone(), d.default));
+                            inn = true;
+                        }
+                        if !inn {
+                            rows.push(Row::Info(pick(lang, "没有录音设备", "No input device").to_string()));
+                        }
+                    }
+                    Some(_) => rows.push(Row::Info(pick(lang, "没有发现音频设备", "No sound devices found").to_string())),
+                    None => rows.push(Row::Info(pick(lang, "正在读取音频设备…", "Reading the sound devices…").to_string())),
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的声音设置", "Windows' sound settings"),
+                    word: ("格式、增强与其余的设备细节由系统进行", "Formats, enhancements, and the rest of the device details are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:sound".into()),
+                }));
+            }
+            (Page::Network, _) => {
+                let lang = self.lang;
+                // The machine's cards down the left; the picked one's addresses, and the speed now, to the right.
+                rows.push(Row::Group(pick(lang, "网卡列表", "Network adapters")));
+                match crate::network::snapshot() {
+                    Some(shot) if !shot.adapters.is_empty() => {
+                        rows.extend(shot.adapters.iter().map(|a| Row::NetAdapter(a.name.clone(), a.up, a.current)));
+                    }
+                    Some(_) => rows.push(Row::Info(pick(lang, "没有发现可用的网卡", "No adapters found").to_string())),
+                    None => rows.push(Row::Info(pick(lang, "正在读取网卡…", "Reading the adapters…").to_string())),
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的网络设置", "Windows' network settings"),
+                    word: ("共享、代理与其余的连接细节由系统进行", "Sharing, proxies, and the rest of the connections are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:network-status".into()),
+                }));
+            }
+            (Page::Notifications, _) => {
+                let lang = self.lang;
+                // The apps that may leave a notice, down the left; the picked one's letting, and the master switch, to the right.
+                match crate::sys::notify_snapshot() {
+                    Some(apps) if !apps.is_empty() => {
+                        rows.push(Row::Group(pick(lang, "应用", "Apps")));
+                        rows.extend(apps.into_iter().map(|a| Row::NotifyApp(a.display, a.aumid, a.enabled)));
+                    }
+                    Some(_) => rows.push(Row::Info(pick(lang, "没有应用留下通知设置", "No app has left a notification setting").to_string())),
+                    None => rows.push(Row::Info(pick(lang, "正在读取通知设置…", "Reading the notification settings…").to_string())),
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的通知设置", "Windows' notification settings"),
+                    word: ("横幅与锁屏的显示样式由系统进行", "How banners and the lock screen show them is the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:notifications".into()),
+                }));
+            }
+            (Page::Storage, _) => {
+                let lang = self.lang;
+                // Each physical disk the machine carries, down the left: its model and the room it holds,
+                // the letters mounted on it told in the preview to the right. Picking one shows its volumes.
+                rows.push(Row::Group(pick(lang, "本机存储", "This PC's storage")));
+                let disks = super::system_settings::disks();
+                if disks.is_empty() {
+                    rows.push(Row::Info(pick(lang, "没读到可用的磁盘。", "No drive could be read.").to_string()));
+                }
+                for d in disks {
+                    rows.push(Row::Disk(d.number, d.model, d.size));
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的存储设置", "Windows' storage settings"),
+                    word: ("各盘的用量与存储感知的细则由系统进行", "How full each drive is, and storage sense's own rules, are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:storagesense".into()),
+                }));
+            }
+            (Page::Privacy, _) => {
+                let lang = self.lang;
+                // The apps that have asked to use each capability, grouped down the left by what they
+                // reach for — the whereabout, the microphone, the camera; one app's letting is pressed
+                // in the preview to the right. Each reading runs PowerShell, so all three are taken off-thread.
+                for (cap, word) in [
+                    ("Location", pick(lang, "位置", "Location")),
+                    ("Microphone", pick(lang, "麦克风", "Microphone")),
+                    ("Webcam", pick(lang, "摄像头", "Camera")),
+                ] {
+                    rows.push(Row::Group(word));
+                    match crate::sys::consent_snapshot(cap) {
+                        Some(apps) if !apps.is_empty() => {
+                            rows.extend(apps.into_iter().map(|a| Row::ConsentApp(cap.to_string(), a.display, a.allowed)));
+                        }
+                        Some(_) => rows.push(Row::Info(pick(lang, "没有应用就这项权限留下记录", "No app has left a mark for this permission").to_string())),
+                        None => rows.push(Row::Info(pick(lang, "正在读取授权…", "Reading the permissions…").to_string())),
+                    }
+                }
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的隐私设置", "Windows' privacy settings"),
+                    word: ("权限的总览与其余类别由系统进行", "The overview of permissions and the other categories are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:privacy".into()),
+                }));
+            }
+            (Page::Gaming, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "游戏", "Gaming")),
+                    Row::Switch(Switch::GameMode),
+                    Row::Switch(Switch::GameDvr),
+                    Row::Note(pick(
+                        lang,
+                        "游戏 DVR 用于在后台录制游戏片段；更细的捕获与快捷键设置由系统进行",
+                        "Game DVR records clips in the background; the finer capture and shortcut settings are the system's to make",
+                    )),
+                ]);
+                rows.push(Row::Do(Do {
+                    name: ("Xbox Game Bar", "Xbox Game Bar"),
+                    word: ("游戏栏、其录制与覆盖层由系统进行", "The Game Bar, its recording, and its overlays are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:gaming-gamebar".into()),
+                }));
+            }
+            // Wi-Fi: the radio's own switch, then the networks split — joined, near, and kept but out of range.
+            (Page::Wifi, _) => {
+                let lang = self.lang;
+                rows.push(Row::Group(pick(lang, "WLAN", "Wi-Fi")));
+                rows.push(Row::Switch(Switch::WifiOn));
+                match crate::wifi::snapshot() {
+                    Some(shot) if shot.on => {
+                        let connected: Vec<_> = shot.nets.iter().filter(|n| n.connected).collect();
+                        let near: Vec<_> = shot.nets.iter().filter(|n| !n.connected).collect();
+                        if !connected.is_empty() {
+                            rows.push(Row::Group(pick(lang, "已连接", "Connected")));
+                            rows.extend(connected.iter().map(|n| Row::WifiNet(n.ssid.clone(), n.profile.clone(), n.signal, n.secure, n.connected, n.known)));
+                        }
+                        rows.push(Row::Group(pick(lang, "可用的网络", "Available networks")));
+                        if near.is_empty() {
+                            rows.push(Row::Info(pick(lang, "附近没有发现其他网络", "No other networks found nearby").to_string()));
+                        }
+                        rows.extend(near.iter().map(|n| Row::WifiNet(n.ssid.clone(), n.profile.clone(), n.signal, n.secure, n.connected, n.known)));
+                        if !shot.saved.is_empty() {
+                            rows.push(Row::Group(pick(lang, "已保存的网络", "Saved networks")));
+                            rows.extend(shot.saved.iter().map(|n| Row::WifiNet(n.ssid.clone(), n.profile.clone(), n.signal, n.secure, n.connected, n.known)));
+                        }
+                    }
+                    Some(_) => rows.push(Row::Info(pick(lang, "WLAN 已关闭，打开后即可搜索附近网络", "WLAN is off. Turn it on to see the networks near").to_string())),
+                    None => rows.push(Row::Info(pick(lang, "正在搜索附近的网络…", "Looking for networks nearby…").to_string())),
+                }
+            }
+            // Bluetooth: the devices split — those kept, and those near — down the left; the picked one's details to the right.
+            (Page::Bluetooth, _) => {
+                let lang = self.lang;
+                rows.push(Row::Group(pick(lang, "蓝牙", "Bluetooth")));
+                rows.push(Row::Switch(Switch::BluetoothOn));
+                match crate::bluetooth::snapshot() {
+                    Some(shot) if shot.radios > 0 => {
+                        if !shot.paired.is_empty() {
+                            rows.push(Row::Group(pick(lang, "已配对的设备", "Paired devices")));
+                            rows.extend(shot.paired.iter().map(|d| Row::BtDevice(d.name.clone(), d.addr.clone(), true, d.connected)));
+                        }
+                        rows.push(Row::Group(pick(lang, "附近的设备", "Devices nearby")));
+                        if shot.nearby.is_empty() {
+                            rows.push(Row::Info(pick(lang, "附近没有发现设备，让设备处于可被发现的状态后重试", "Nothing found nearby. Make the device discoverable and try again").to_string()));
+                        }
+                        rows.extend(shot.nearby.iter().map(|d| Row::BtDevice(d.name.clone(), d.addr.clone(), d.remembered, d.connected)));
+                        rows.push(Row::Do(Do { name: (("添加设备"), ("Add device")), word: (("由系统的蓝牙页完成配对"), ("A pairing is finished in Windows' Bluetooth page")), button: (("打开"), ("Open")), what: Target::Open("ms-settings:bluetooth".into()) }));
+                    }
+                    Some(_) if crate::bluetooth::adapter() => rows.push(Row::Info(pick(lang, "蓝牙已关闭，打开后即可搜索附近设备", "Bluetooth is off. Turn it on to see the devices nearby").to_string())),
+                    Some(_) => rows.push(Row::Info(pick(lang, "本机没有蓝牙无线电", "This PC has no Bluetooth radio").to_string())),
+                    None => rows.push(Row::Info(pick(lang, "正在读取蓝牙设备…", "Reading Bluetooth devices…").to_string())),
+                }
+            }
+            // Power & battery: the plan, the screen and sleep delays, and what the battery says.
+            (Page::Power, _) => {
+                let lang = self.lang;
+                let zh = lang == Lang::Zh;
+                rows.extend([
+                    Row::Group(pick(lang, "电源模式", "Power mode")),
+                    Row::Choice(Field::PowerPlan),
+                    Row::Group(pick(lang, "屏幕与睡眠", "Screen and sleep")),
+                    Row::Slider(Field::ScreenOff),
+                    Row::Slider(Field::Sleep),
+                    Row::Group(pick(lang, "电池", "Battery")),
+                ]);
+                let line = match (super::system_settings::battery(), super::system_settings::battery_health()) {
+                    (Some((pct, charging)), health) => format!(
+                        "{}{} · {}",
+                        pick(lang, "剩余", "Remaining"),
+                        format!(" {pct}%"),
+                        if charging { pick(lang, "正在充电", "charging").to_string() } else { pick(lang, "未充电", "not charging").to_string() }
+                    ) + &health.map(|h| format!(" · {} {h}%", pick(lang, "健康度", "Health"))).unwrap_or_default(),
+                    (None, _) => pick(lang, "本机没有电池", "This PC has no battery").to_string(),
+                };
+                rows.push(Row::Info(line));
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的电源设置", "Windows' power settings"),
+                    word: ("合盖、按钮与计划的高级选项由系统进行", "Lids, buttons, and the plan's deeper options are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:power".into()),
+                }));
+                let _ = zh;
+            }
+            // Focus / Do Not Disturb.
+            (Page::Focus, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "专注模式", "Focus")),
+                    Row::Switch(Switch::FocusOn),
+                    Row::Switch(Switch::FocusLock),
+                    Row::Note(pick(
+                        lang,
+                        "开启后系统将不再弹出通知横幅；定时的自动规则由系统在专注模式页设置",
+                        "While on, Windows holds its banners back; the timed automatic rules are set in Focus by the system",
+                    )),
+                ]);
+                rows.push(Row::Do(Do {
+                    name: ("Windows 的专注模式设置", "Windows' focus settings"),
+                    word: ("定时免打扰与重复规则由系统进行", "The do-not-disturb schedule and its repeating rules are the system's to set"),
+                    button: ("打开", "Open"),
+                    what: Target::Open("ms-settings:notifications".into()),
+                }));
+            }
+            // Screen time: the day's totals, with the week's bars in the preview.
+            (Page::ScreenTime, _) => {
+                let lang = self.lang;
+                let zh = lang == Lang::Zh;
+                rows.extend([
+                    Row::Group(pick(lang, "今日使用", "Today")),
+                    Row::Info(super::screen_time::today_spoken(zh)),
+                    Row::Group(pick(lang, "昨日使用", "Yesterday")),
+                    Row::Info(super::screen_time::yesterday_spoken(zh)),
+                    Row::Note(pick(
+                        lang,
+                        "仅记录在最前的程序所用的时间，每 10 秒采集一次，保留 21 天",
+                        "Only the time the frontmost program holds is kept, asked every ten seconds for twenty-one days",
+                    )),
+                ]);
+            }
+            // Keyboard & mouse.
+            (Page::Input, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "键盘", "Keyboard")),
+                    Row::Slider(Field::KeyDelay),
+                    Row::Slider(Field::KeyRate),
+                    Row::Group(pick(lang, "鼠标", "Mouse")),
+                    Row::Slider(Field::MouseSpeed),
+                    Row::Choice(Field::ScrollLines),
+                    Row::Group(pick(lang, "指针", "Pointer")),
+                    Row::Info(format!("{} · {}", pick(lang, "光标方案", "Pointer scheme"), super::system_settings::cursor_scheme())),
+                ]);
+            }
+            // Accessibility.
+            (Page::Accessibility, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "显示", "Display")),
+                    Row::Switch(Switch::HighContrast),
+                    Row::Slider(Field::TextSize),
+                    Row::Slider(Field::CursorSize),
+                    Row::Note(pick(
+                        lang,
+                        "文字缩放的完全生效需注销并重新登录",
+                        "A change to the text size takes full hold after signing out and back in",
+                    )),
+                ]);
+            }
+            // Desktop & taskbar.
+            (Page::Desktop, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "任务栏", "Taskbar")),
+                    Row::Switch(Switch::TaskbarAutohide),
+                    Row::Switch(Switch::TaskbarSmall),
+                    Row::Choice(Field::TaskbarPosition),
+                    Row::Choice(Field::CombineIcons),
+                    Row::Note(pick(
+                        lang,
+                        "任务栏的改变即时生效；若未变，注销一次即可全部采用",
+                        "Taskbar changes take hold at once; should one linger, signing out gathers them all",
+                    )),
+                ]);
+            }
+            // Wallpaper: the way it fills the screen, and the picker in the preview.
+            (Page::Wallpaper, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Group(pick(lang, "显示方式", "Fit")),
+                    Row::Choice(Field::WallpaperStyle),
+                    Row::Note(pick(
+                        lang,
+                        "点右侧缩略图即可换壁纸；图片取自系统的墙纸目录与主题所用",
+                        "Press a picture at the right to set it as the wallpaper; they come from Windows' own shelves and the themes'",
+                    )),
+                ]);
+            }
+            // Control centre / quick settings.
+            (Page::ControlCenter, _) => {
+                let lang = self.lang;
+                rows.push(Row::Group(pick(lang, "已显示的快捷开关", "Buttons shown")));
+                let buttons = super::system_settings::quick_buttons();
+                if buttons.is_empty() {
+                    rows.push(Row::Info(pick(lang, "快捷开关由系统管理", "The quick buttons are kept by the system").to_string()));
+                } else {
+                    rows.extend(buttons.into_iter().map(Row::Info));
+                }
+                rows.push(Row::Do(Do { name: (("编辑快捷开关"), ("Edit the quick buttons")), word: (("增减与排列由系统在任务栏设置中完成"), ("Adding, taking away and the order are done in the taskbar's settings")), button: (("打开"), ("Open")), what: Target::Open("ms-settings:personalization-taskbar".into()) }));
+            }
+            // Account.
+            (Page::Account, _) => {
+                let lang = self.lang;
+                let zh = lang == Lang::Zh;
+                rows.extend([
+                    Row::Info(format!("{} · {}", pick(lang, "账户名", "Signed in as"), super::system_settings::display_name())),
+                    Row::Group(pick(lang, "登录", "Sign-in")),
+                    Row::Switch(Switch::LockScreen),
+                ]);
+                let _ = zh;
+                rows.push(Row::Do(Do { name: (("管理账户"), ("Manage accounts")), word: (("姓名、图片、密码与 Microsoft 账户由系统设置"), ("The name, picture, password and Microsoft account are set by Windows")), button: (("打开"), ("Open")), what: Target::Open("ms-settings:yourinfo".into()) }));
+            }
+            // About this PC: the machine's own facts, read line by line.
+            (Page::About, _) => {
+                let lang = self.lang;
+                let zh = lang == Lang::Zh;
+                rows.push(Row::Group(pick(lang, "设备规格", "Device specifications")));
+                rows.extend(super::system_settings::about_facts(zh).into_iter().map(|(name, value)| Row::Info(format!("{name} · {value}"))));
+            }
+            // The machine's own general settings, gathered as macOS lays them out
+            // under 系统设置 > 通用: a sidebar page of its own, under 系统. Each row
+            // leads a page kept here; where Windows keeps the thing and Glance does
+            // not, a word for the one left out.
+            (Page::System, _) => {
+                let lang = self.lang;
+                rows.extend([
+                    Row::Nav("关于本机", "About this PC", "硬件、系统版本与序列号", "Its hardware, system version and serial", Target::Preview(Page::About)),
+                    Row::Nav("软件更新", "Software Update", "检查、下载与安装更新", "Checking for and installing updates", Target::Preview(Page::Update)),
+                    Row::Nav("储存空间", "Storage", "各磁盘的用量与清理", "What each drive holds, and clearing it", Target::Preview(Page::Storage)),
+                    Row::Nav("登录项", "Login Items", "登录时启动的应用", "What starts of its own accord at sign-in", Target::Preview(Page::Startup)),
+                    Row::Nav("日期与时间", "Date & Time", "时区、格式与校时", "The zone, the formats, the clock", Target::Preview(Page::DateTime)),
+                    Row::Nav("辅助功能", "Accessibility", "高对比度与文字大小", "High contrast and the text's size", Target::Preview(Page::Access)),
+                ]);
+                rows.push(Row::Group(pick(lang, "由 Windows 的设置页接管", "Left to Windows' own pages")));
+                rows.extend([
+                    Row::Nav("语言与地区", "Language & Region", "显示语言、格式与键盘", "The display language, its formats, the keyboard", Target::Preview(Page::Language)),
+                    Row::Nav("隔空投送与接力（就近共享）", "AirDrop & Handoff (nearby sharing)", "就近收发文件、跨机接续任务", "Files to a nearby PC, a task carried across", Target::Preview(Page::Nearby)),
+                    Row::Nav("共享（网络和共享中心）", "Sharing (network and sharing)", "文件夹与打印机的共享", "The folders and printers shared out", Target::Preview(Page::Sharing)),
+                    Row::Nav("时间机器（Windows 备份）", "Time Machine (Windows Backup)", "备份与还原", "Backup and restore", Target::Preview(Page::Backup)),
+                    Row::Nav("启动磁盘（恢复）", "Startup Disk (recovery)", "开机修复与恢复环境", "Startup repair and the recovery tools", Target::Preview(Page::Recovery)),
+                ]);
+                rows.push(Row::Note(pick(
+                    lang,
+                    "「传输与还原」需在两台电脑之间用 Microsoft 的传输工具完成，Glance 不代做。",
+                    "Moving data in from another machine is done between the two with Microsoft's own transfer tool; Glance leaves this to Windows.",
+                )));
+            }
+            // The hub's sub-items shown only in its right pane: the hub's rows name
+            // them, and their preview is drawn from the readings; they turn to no
+            // page of their own.
+            (Page::Update, _)
+            | (Page::Startup, _)
+            | (Page::Access, _)
+            | (Page::Language, _)
+            | (Page::Nearby, _)
+            | (Page::Sharing, _)
+            | (Page::Backup, _)
+            | (Page::Recovery, _) => {}
         }
         rows
     }
@@ -2850,12 +3625,67 @@ impl Ui {
     fn turn_to(&mut self, page: Page) {
         if page != self.page {
             self.page = page;
+            // Leaving the hub: the sub-item's preview shown goes with it.
+            self.preview = None;
             self.scroll = 0.0;
             self.scroll_target = 0.0;
             self.drag = None;
             self.raise_more();
         }
         self.next_frame = Instant::now();
+    }
+
+    /// The 通用 hub: pick which sub-item's preview the right pane shows, without
+    /// turning to its page.
+    fn pick_preview(&mut self, page: Page) {
+        self.preview = Some(page);
+        // Each sub-item is read from the top of its own pane.
+        self.hub_scroll = 0.0;
+        self.hub_scroll_target = 0.0;
+        self.hub_tall = 0.0;
+        self.next_frame = Instant::now();
+    }
+
+    /// How far the hub's right pane may go: what its cards last drew past its bottom,
+    /// kept between the turns so it eases back to 0 rather than jumping there.
+    fn hub_most(&self) -> f32 {
+        (self.hub_tall - self.hub_room()).max(0.0)
+    }
+
+    /// The height of the hub's right pane: the window's, less the title above it and
+    /// the padding under.
+    fn hub_room(&self) -> f32 {
+        (self.client().1 - PAD_TOP - 40.0 - PAD_TOP).max(0.0)
+    }
+
+    /// The hub's right pane scrolled by `scroll`: the clickables the page pushed at
+    /// their unshifted places are moved to where the cards were drawn, and those
+    /// scrolled clean out of the pane dropped. A hairline thumb marks the pane as
+    /// scrollable once its cards outgrow it. The cards themselves are drawn shifted
+    /// by the caller, which clips and translates around the paint.
+    fn hub_shifted(&mut self, frame: &Frame, palette: &Palette, area: Rect, painted: usize, scroll: f32) {
+        // What the page pushed while it was drawn, taken back to be set where it
+        // now stands and dropped where the scroll leaves it out of the pane.
+        if scroll > 0.0 {
+            let laid = self.targets.split_off(painted);
+            for (r, target) in laid {
+                let moved = Rect { x: r.x, y: r.y - scroll, w: r.w, h: r.h };
+                // (Scrolled clean out of the pane: neither drawn there nor clickable.)
+                if moved.y + moved.h > area.y - 8.0 && moved.y < area.y + area.h + 8.0 {
+                    self.targets.push((moved, target));
+                }
+            }
+        }
+        let most = self.hub_most();
+        if most <= 0.0 {
+            return;
+        }
+        // A hairline thumb at the pane's edge once the cards outgrow it, so it reads as scrollable.
+        let room = area.h;
+        let thumb = (room * room / (room + most)).max(24.0);
+        let at = area.y + (room - thumb) * (scroll / most).clamp(0.0, 1.0);
+        let over = self.pointer.is_some_and(|(x, _)| x >= area.x);
+        fill(frame, palette.text3.alpha(if over { 0.7 } else { 0.4 }), area.x + area.w - 1.0, at, 2.0, thumb, 1.0);
     }
 
     /// The modules of `MORE` listed with the rest from here on: those on; the
@@ -3135,6 +3965,10 @@ impl Ui {
                 Some(word) => (Cow::Owned(word), width - ROW_SIDE - CHEVRON_ROOM - 40.0 - 12.0 - ITEM_INSET),
                 None => return 0.0,
             },
+            // The hub's row: its word beside the chevron that stands where a button would.
+            Row::Nav(_, _, hint_zh, hint_en, _) => {
+                (Cow::Borrowed(pick(self.lang, hint_zh, hint_en)), width - 2.0 * ROW_SIDE - CHEVRON_ROOM - 12.0)
+            }
             _ => match self.button_row(row, Instant::now()) {
                 Some((_, word, buttons)) => {
                     let taken: f32 = buttons.iter().map(|(text, ..)| button(text) + 8.0).sum();
@@ -3211,6 +4045,9 @@ impl Ui {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
         Some(match row {
+            // The hub's row is drawn whole and pressed whole (see `paint_list`): its name
+            // is told once, not echoed back as a button's word.
+            Row::Nav(..) => return None,
             Row::Do(d) => (
                 p(d.name.0, d.name.1),
                 p(d.word.0, d.word.1),
@@ -3408,6 +4245,111 @@ impl Ui {
                 p("面板与托盘图标将一并关闭", "Closes the panels and the tray icon"),
                 vec![(p("退出", "Quit"), Target::Quit, Button::Plain)],
             ),
+            // A network near: its name, its signal and kind, and what can be done to it here.
+            Row::WifiNet(ssid, profile, signal, secure, connected, known) => {
+                let state = if *connected {
+                    p("已连接", "Connected")
+                } else if *known {
+                    p("已保存", "Saved")
+                } else {
+                    p("未连接", "Not connected")
+                };
+                let detail = if *signal == 0 {
+                    state
+                } else {
+                    format!("{signal}% · {state} · {}", if *secure { p("加密", "Secured") } else { p("开放", "Open") })
+                };
+                let mut buttons = Vec::new();
+                if *connected {
+                    buttons.push((p("断开", "Disconnect"), Target::WifiDisconnect, Button::Plain));
+                } else {
+                    if *known && !profile.is_empty() {
+                        buttons.push((p("忘记", "Forget"), Target::WifiForget(profile.clone()), Button::Plain));
+                    }
+                    let join = if *known && !profile.is_empty() { Target::WifiJoin(profile.clone()) } else { Target::WifiAsk(ssid.clone()) };
+                    buttons.push((p("连接", "Join"), join, Button::Accent));
+                }
+                (ssid.clone(), detail, buttons)
+            }
+            // A device near or kept: its name and address, and where it is not yet paired, a button to ask Windows.
+            Row::BtDevice(name, addr, paired, connected) => {
+                let state = if *connected {
+                    p("已连接", "Connected")
+                } else if *paired {
+                    p("已配对", "Paired")
+                } else {
+                    p("未配对", "Not paired")
+                };
+                let detail = format!("{addr} · {state}");
+                let buttons = if *paired {
+                    Vec::new()
+                } else {
+                    vec![(p("配对", "Pair"), Target::BtPair(name.clone()), Button::Accent)]
+                };
+                (name.clone(), detail, buttons)
+            }
+            // An adapter: its name and address, and its state. Nothing to press here — the row's body picks it
+            // for the preview.
+            Row::NetAdapter(name, up, current) => {
+                let state = if *current {
+                    p("使用中", "In use")
+                } else if *up {
+                    p("已连接", "Connected")
+                } else {
+                    p("未连接", "Not connected")
+                };
+                let ipv4 = crate::network::snapshot()
+                    .and_then(|s| s.adapters.iter().find(|a| a.name == *name).map(|a| a.ipv4.clone()))
+                    .filter(|v| !v.is_empty());
+                let detail = match ipv4 {
+                    Some(v) => format!("{v} · {state}"),
+                    None => state,
+                };
+                (name.clone(), detail, Vec::new())
+            }
+            // A display: its name and the mode it wears now. Nothing to press here — the row's body picks it for the preview.
+            Row::Screen(name, primary) => {
+                let state = if *primary { p("主显示器", "Main display") } else { p("显示器", "Display") };
+                let mode = crate::sys::current(name)
+                    .map(|m| format!("{}×{} · {} Hz", m.wide, m.tall, m.hz))
+                    .unwrap_or_default();
+                let detail = if mode.is_empty() { state } else { format!("{mode} · {state}") };
+                // Titled by the monitor's own name (the model it reports), not the raw GDI path.
+                (crate::sys::friendly(name), detail, Vec::new())
+            }
+            // A sound device: its name, how loud it stands and whether muted. Nothing to press here — the body picks it for the preview.
+            Row::AudioDevice(id, name, default) => {
+                let read = crate::audio::snapshot().and_then(|s| s.devices.iter().find(|d| &d.id == id).cloned());
+                let loud = match &read {
+                    Some(d) if d.muted => p("已静音", "Muted"),
+                    Some(d) => format!("{}%", d.volume),
+                    None => String::new(),
+                };
+                let detail = if *default && !loud.is_empty() {
+                    format!("{loud} · {}", p("默认", "Default"))
+                } else if *default {
+                    p("默认", "Default").to_string()
+                } else {
+                    loud
+                };
+                (name.clone(), detail, Vec::new())
+            }
+            // An app's notice setting: its name and whether it is let now. Nothing to press here — the body picks it for the preview.
+            Row::NotifyApp(display, _, enabled) => {
+                let detail = if *enabled { p("允许通知", "Allowed") } else { p("已禁止", "Off") };
+                (display.clone(), detail, Vec::new())
+            }
+            // An app's consent: its name and whether it is let now. Nothing to press here — the body picks it for the preview.
+            Row::ConsentApp(_, display, allowed) => {
+                let detail = if *allowed { p("已允许", "Allowed") } else { p("已拒绝", "Blocked") };
+                (display.clone(), detail, Vec::new())
+            }
+            // A physical disk: its model (or a plain number when it reports none) and the room it holds.
+            // Nothing to press here — the body picks it to show its volumes in the preview.
+            Row::Disk(number, model, size) => {
+                let name = if model.is_empty() { format!("{} {number}", p("磁盘", "Disk")) } else { model.clone() };
+                (name, human_bytes(*size), Vec::new())
+            }
             _ => return None,
         })
     }
@@ -3556,6 +4498,56 @@ impl Ui {
             ),
             // (Slid rather than chosen: see `slider`. The grid's 0 is the screen's own choice.)
             Field::DockSize | Field::DockSpacing | Field::DockPeak | Field::DockClear | Field::PadCols | Field::PadRows => (self.slider(field).0, Vec::new(), None),
+            Field::SystemTheme => (
+                pick(lang, "模式", "Mode"),
+                vec![s("浅色", "Light"), s("深色", "Dark")],
+                Some(usize::from(super::system_settings::system_dark())),
+            ),
+            Field::Accent => {
+                let names = ACCENTS.iter().map(|(_, zh, en)| s(zh, en)).collect();
+                let current = crate::os::accent(false).and_then(|rgb| ACCENTS.iter().position(|(c, ..)| *c == rgb));
+                (pick(lang, "强调色", "Accent"), names, current)
+            }
+            // The power plan, read from the active scheme.
+            Field::PowerPlan => {
+                let (names, chosen) = super::system_settings::plan_choices(lang == Lang::Zh);
+                (pick(lang, "电源模式", "Power mode"), names, chosen)
+            }
+            Field::ScrollLines => (
+                pick(lang, "每次滚动", "Scrolls at a notch"),
+                vec![s("一行行", "One line"), s("3 行", "3 lines"), s("5 行", "5 lines"), s("一整屏", "A whole screen")],
+                [1u32, 3, 5, u32::MAX].iter().position(|&n| n == super::system_settings::scroll_lines().max(1)),
+            ),
+            Field::TaskbarPosition => (
+                pick(lang, "任务栏位置", "Taskbar position"),
+                vec![s("底部", "Bottom"), s("顶部", "Top"), s("左侧", "Left"), s("右侧", "Right")],
+                // StuckRects3 numbers edges 0 left, 1 top, 2 right, 3 bottom; shown bottom first.
+                Some(match super::system_settings::taskbar_position() {
+                    3 => 0,
+                    1 => 1,
+                    0 => 2,
+                    2 => 3,
+                    _ => 0,
+                }),
+            ),
+            Field::CombineIcons => (
+                pick(lang, "合并任务栏按钮", "Combine taskbar buttons"),
+                vec![s("始终", "Always"), s("任务栏满时", "When full"), s("从不", "Never")],
+                [0u32, 1, 2].iter().position(|&n| n == super::system_settings::combine_icons()),
+            ),
+            Field::WallpaperStyle => (
+                pick(lang, "显示方式", "Choose a fit"),
+                vec![s("填充", "Fill"), s("适合", "Fit"), s("拉伸", "Stretch"), s("居中", "Center"), s("平铺", "Tile")],
+                Some(match super::system_settings::wallpaper_style() {
+                    10 => 0,
+                    6 => 1,
+                    2 => 2,
+                    0 => 3,
+                    _ => 4,
+                }),
+            ),
+            // (The rest are slid rather than chosen: see `slider`.)
+            Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => (self.slider(field).0, Vec::new(), None),
         }
     }
 
@@ -3591,6 +4583,19 @@ impl Ui {
             Field::DockEdge => settings.dock.edge = [DockEdge::Bottom, DockEdge::Top][index],
             // (The dock's and the grid's are set on a slider, not chosen: see `set_slider`.)
             Field::DockSize | Field::DockSpacing | Field::DockPeak | Field::DockClear | Field::PadCols | Field::PadRows => {}
+            Field::SystemTheme => super::system_settings::set_system_dark(index == 1),
+            Field::Accent => {
+                if let Some((rgb, _, _)) = ACCENTS.get(index) {
+                    super::system_settings::set_accent_colour(*rgb);
+                }
+            }
+            Field::PowerPlan => super::system_settings::set_plan(index),
+            Field::ScrollLines => super::system_settings::set_scroll_lines([1, 3, 5, u32::MAX][index]),
+            Field::TaskbarPosition => super::system_settings::set_taskbar_position([3, 1, 0, 2][index]),
+            Field::CombineIcons => super::system_settings::set_combine_icons([0, 1, 2][index]),
+            Field::WallpaperStyle => super::system_settings::set_wallpaper_style([10, 6, 2, 0, 0][index]),
+            // (Slid rather than chosen: see `set_slider`.)
+            Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => {}
         }
         self.save();
         match field {
@@ -3689,6 +4694,14 @@ impl Ui {
             // choice — the denser the ask, the smaller every tile comes out (see `crate::ui::launchpad`).)
             Field::PadCols => (pick(lang, "每页列数", "Tiles across a page"), 0.0, 12.0, 1.0, self.settings.dock.pad_cols as f32),
             Field::PadRows => (pick(lang, "每页行数", "Rows of tiles"), 0.0, 10.0, 1.0, self.settings.dock.pad_rows as f32),
+            // The machine's own settings, read live and written back to the registry.
+            Field::ScreenOff => (pick(lang, "关闭屏幕前", "Turn off after"), 0.0, 60.0, 1.0, super::system_settings::screen_timeout() as f32),
+            Field::Sleep => (pick(lang, "进入睡眠前", "Sleep after"), 0.0, 60.0, 1.0, super::system_settings::sleep_timeout() as f32),
+            Field::KeyDelay => (pick(lang, "重复前的延迟", "Delay before repeat"), 0.0, 3.0, 1.0, super::system_settings::key_delay() as f32),
+            Field::KeyRate => (pick(lang, "重复速率", "Repeat rate"), 0.0, 31.0, 1.0, super::system_settings::key_rate() as f32),
+            Field::MouseSpeed => (pick(lang, "指针速度", "Pointer speed"), 0.0, 20.0, 1.0, super::system_settings::mouse_speed() as f32),
+            Field::TextSize => (pick(lang, "文字大小", "Text size"), 100.0, 225.0, 25.0, super::system_settings::text_scale() as f32),
+            Field::CursorSize => (pick(lang, "光标大小", "Pointer size"), 1.0, 15.0, 1.0, super::system_settings::cursor_size() as f32),
             _ => (pick(lang, "大小", "Size"), sizes.0, sizes.1, 0.05, overlay.size.clamp(sizes.0, sizes.1)),
         }
     }
@@ -3701,6 +4714,11 @@ impl Ui {
             // (The launchpad's grid: none asked for is the screen's own choice, said rather than shown as a 0.)
             Field::PadCols | Field::PadRows if value < 0.5 => pick(self.lang, "自动", "Automatic").to_string(),
             Field::PadCols | Field::PadRows => format!("{value:.0}"),
+            // The machine's own sliders, said in their own units.
+            Field::ScreenOff | Field::Sleep if value < 0.5 => pick(self.lang, "从不", "Never").to_string(),
+            Field::ScreenOff | Field::Sleep => format!("{value:.0} {}", pick(self.lang, "分", "min")),
+            Field::TextSize => format!("{value:.0}%"),
+            Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::CursorSize => format!("{value:.0}"),
             _ => format!("{:.0}%", value * 100.0),
         }
     }
@@ -3716,14 +4734,31 @@ impl Ui {
         if value == now {
             return;
         }
-        put_slider(&mut self.settings, field, value);
-        crate::app().preview(|live| put_slider(live, field, value));
+        // The machine's own sliders write the registry, not Glance's settings.
+        match field {
+            Field::ScreenOff => super::system_settings::set_screen_timeout(value as u32),
+            Field::Sleep => super::system_settings::set_sleep_timeout(value as u32),
+            Field::KeyDelay => super::system_settings::set_key_delay(value as u32),
+            Field::KeyRate => super::system_settings::set_key_rate(value as u32),
+            Field::MouseSpeed => super::system_settings::set_mouse_speed(value as u32),
+            Field::TextSize => super::system_settings::set_text_scale(value as u32),
+            Field::CursorSize => super::system_settings::set_cursor_size(value as u32),
+            _ => {
+                put_slider(&mut self.settings, field, value);
+                crate::app().preview(|live| put_slider(live, field, value));
+            }
+        }
         self.next_frame = Instant::now();
     }
 
     /// Keeps a slider's value, and only it: the settings changed elsewhere
     /// while it slid (the overlay placed, a game's offer made) stand.
     fn keep_slider(&mut self, field: Field) {
+        // (The machine's own sliders are already written to the registry; nothing of Glance's settings holds them.)
+        if matches!(field, Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize) {
+            self.next_frame = Instant::now();
+            return;
+        }
         let value = self.slider(field).4;
         let mut now = None;
         crate::app().change(|held| {
@@ -3879,6 +4914,72 @@ impl Ui {
             }
             Switch::Clock24 => (p("24 小时制", "24-hour clock"), None, super::system_settings::clock_24()),
             Switch::Seconds => (p("显示秒数", "Show seconds"), None, super::system_settings::clock_seconds()),
+            Switch::AnimOn => (
+                p("动画效果", "Animations"),
+                Some(p("最小化、淡入这些过渡，系统一起跟着", "Minimise, fade and the like, the system follows them")),
+                super::system_settings::system_animation(),
+            ),
+            Switch::Glass => (
+                p("透明效果", "Transparency"),
+                Some(p("开始、任务栏与窗口的磨砂玻璃", "Frosted glass on Start, the taskbar, and windows")),
+                super::system_settings::system_transparent(),
+            ),
+            Switch::AccentOn => (
+                p("在开始、任务栏和窗口边框上用强调色", "Accent on Start, taskbar, and borders"),
+                None,
+                super::system_settings::color_prevalence(),
+            ),
+            // The machine's own switches, read live.
+            Switch::WifiOn => (
+                p("WLAN", "Wi-Fi"),
+                Some(p("无线网络的开关；关闭后本机不再连接任何无线网络", "The wireless radio's own switch; with it off, nothing is joined over Wi-Fi")),
+                crate::wifi::state().unwrap_or(false),
+            ),
+            Switch::BluetoothOn => (
+                p("蓝牙", "Bluetooth"),
+                Some(p("蓝牙无线电的开关；关闭后本机不再连接任何蓝牙设备", "The Bluetooth radio's own switch; with it off, no Bluetooth device is in touch")),
+                crate::bluetooth::on(),
+            ),
+            Switch::FocusOn => (
+                p("专注模式（勿扰）", "Do not disturb"),
+                Some(p("开启后系统挂起通知横幅，直至关闭", "While on, Windows holds its banners back until it is turned off")),
+                super::system_settings::dnd_on(),
+            ),
+            Switch::FocusLock => (
+                p("锁屏时显示通知", "Notices above the lock screen"),
+                Some(p("允许通知在锁屏上出现；关闭后锁屏保持安静", "Whether notices may show on the lock screen; with it off, the lock screen stays quiet")),
+                super::system_settings::lock_toast(),
+            ),
+            Switch::HighContrast => (
+                p("高对比度", "High contrast"),
+                Some(p("以强烈配色显示界面，适合视力较弱时阅读", "Shows the interface in strong colours, easier to read")),
+                super::system_settings::high_contrast(),
+            ),
+            Switch::TaskbarAutohide => (
+                p("自动隐藏任务栏", "Auto-hide the taskbar"),
+                Some(p("指针移到任务栏所在边缘时才出现", "It shows when the pointer reaches the edge it stands at")),
+                super::system_settings::taskbar_autohide(),
+            ),
+            Switch::TaskbarSmall => (
+                p("小任务栏图标", "Small taskbar icons"),
+                None,
+                super::system_settings::taskbar_small(),
+            ),
+            Switch::LockScreen => (
+                p("唤醒时显示锁屏界面", "Show the lock screen on wake"),
+                None,
+                super::system_settings::lock_screen_on(),
+            ),
+            Switch::GameMode => (
+                p("游戏模式", "Game Mode"),
+                Some(p("玩游戏时让系统把资源优先分给游戏", "While gaming, Windows gives the game first call on resources")),
+                super::system_settings::game_mode(),
+            ),
+            Switch::GameDvr => (
+                p("游戏 DVR", "Game DVR"),
+                Some(p("在后台录制游戏片段的记录器", "The recorder that captures game clips in the background")),
+                super::system_settings::game_flag("AppCaptureEnabled"),
+            ),
             // The version this is, where the user looks for a newer one.
             Switch::Updates => {
                 return (p("自动检查更新", "Check for updates"), Some(Cow::Borrowed(p("每天检查一次，并向 Glance 网站告知当前版本，用于统计使用情况。发送过诊断信息时，一并获取其回复。不包含可识别这台电脑的信息", "Once a day. Glance's site is told this version, to count how many run it, and asked for replies to the diagnostics sent. Nothing that tells this PC from another"))), self.settings.check_updates);
@@ -3922,6 +5023,34 @@ impl Ui {
             // The machine's own clock switches write the registry and go on: nothing of Glance's settings changes.
             Switch::Clock24 => super::system_settings::toggle_clock24(),
             Switch::Seconds => super::system_settings::toggle_seconds(),
+            Switch::AnimOn => super::system_settings::set_system_animation(!super::system_settings::system_animation()),
+            Switch::Glass => super::system_settings::set_system_transparent(!super::system_settings::system_transparent()),
+            Switch::AccentOn => super::system_settings::set_color_prevalence(!super::system_settings::color_prevalence()),
+            // The machine's own switches write the stack or the registry, then go on.
+            Switch::WifiOn => {
+                // A quick call into the stack: the switch reads the radio's real state back, so a refused
+                // toggle (no rights, no radio) leaves it where it was rather than lying.
+                let want = !crate::wifi::state().unwrap_or(false);
+                crate::wifi::set_on(want);
+            }
+            Switch::BluetoothOn => {
+                // Enabling or disabling an adapter is the system's to take its time over, so it is done off
+                // the frame; the switch reads the radio's real state back meanwhile, a refused toggle leaving
+                // it where it was rather than lying.
+                let want = !crate::bluetooth::on();
+                std::thread::spawn(move || {
+                    crate::bluetooth::set(want);
+                    crate::ui::settings_window::follow_settings();
+                });
+            }
+            Switch::FocusOn => super::system_settings::set_dnd(!super::system_settings::dnd_on()),
+            Switch::FocusLock => super::system_settings::set_lock_toast(!super::system_settings::lock_toast()),
+            Switch::HighContrast => super::system_settings::set_high_contrast(!super::system_settings::high_contrast()),
+            Switch::TaskbarAutohide => super::system_settings::set_taskbar_autohide(!super::system_settings::taskbar_autohide()),
+            Switch::TaskbarSmall => super::system_settings::set_taskbar_small(!super::system_settings::taskbar_small()),
+            Switch::LockScreen => super::system_settings::set_lock_screen(!super::system_settings::lock_screen_on()),
+            Switch::GameMode => super::system_settings::set_game_mode(!super::system_settings::game_mode()),
+            Switch::GameDvr => super::system_settings::toggle_game_flag("AppCaptureEnabled"),
             Switch::Updates => settings.check_updates ^= true,
             Switch::HeatAlert => settings.heat_alert ^= true,
             Switch::TrayHidden => settings.tray_hidden ^= true,
@@ -4676,6 +5805,25 @@ impl Ui {
             Target::Shortcut(which) => self.record(if self.recording == Some(which) { None } else { Some(which) }),
             Target::ClearShortcut(which) => self.set_shortcut(which, None),
             Target::Nav(page) => self.turn_to(page),
+            Target::Preview(page) => self.pick_preview(page),
+            // Nearby sharing let on or off, then read back so the switch never
+            // lies about what the machine now holds.
+            Target::Nearby(on) => {
+                super::system_settings::set_nearby_sharing(on);
+                self.next_frame = Instant::now();
+            }
+            // A restart into the recovery environment or the firmware setup: the
+            // machine's own doing, asked with elevation.
+            Target::RebootTo(recovery) => {
+                super::system_settings::reboot_to(recovery);
+            }
+            // One login item let run or held: the shell's own mark written, the list
+            // read again when it lands — where the write is refused, the old state
+            // comes back rather than a lie.
+            Target::Startup(machine, name, on) => {
+                crate::sys::startup_apply(machine, name, on);
+                self.next_frame = Instant::now();
+            }
             Target::Tab(tab) => self.turn_tab(tab),
             Target::Element(name) => {
                 let on = self.item_on("lyrics", name);
@@ -4778,6 +5926,157 @@ impl Ui {
                 let uri = HSTRING::from(page);
                 unsafe { ShellExecuteW(Some(self.hwnd), w!("open"), &uri, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
             }
+            Target::ThemePick(index) => {
+                self.theme_picked = Some(index);
+                self.next_frame = Instant::now();
+            }
+            Target::ThemeConfirm => {
+                if let Some(index) = self.theme_picked.take() {
+                    super::system_settings::wear_theme(index);
+                    // (The theme takes a moment to put on; read again after it.)
+                    self.next_frame = Instant::now() + Duration::from_millis(1200);
+                }
+            }
+            // The wireless networks, acted on through the stack.
+            Target::WifiJoin(profile) => {
+                if !crate::wifi::connect(&profile) {
+                    crate::journal::note(format!("wifi: could not join {profile}"));
+                }
+            }
+            // (A new network's key is Windows' to be given: opened where it is asked.)
+            Target::WifiAsk(ssid) => {
+                let uri = HSTRING::from(format!("ms-settings:network-wifi"));
+                let _ = ssid;
+                unsafe { ShellExecuteW(Some(self.hwnd), w!("open"), &uri, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+            }
+            Target::WifiForget(profile) => {
+                crate::wifi::forget(&profile);
+            }
+            // Letting go of the network joined now, without forgetting it.
+            Target::WifiDisconnect => {
+                if !crate::wifi::disconnect() {
+                    crate::journal::note("wifi: could not disconnect");
+                }
+                self.wifi_key = None;
+                self.next_frame = Instant::now();
+            }
+            // Showing, then hiding, the key kept for the network shown now.
+            Target::WifiKey => {
+                if self.wifi_key.take().is_none() {
+                    let profile = self.wifi_chosen_profile().unwrap_or_default();
+                    self.wifi_key = Some(crate::wifi::password(&profile).unwrap_or_default());
+                }
+                self.next_frame = Instant::now();
+            }
+            // Picking a network to show in the preview: its key is put away again.
+            Target::WifiSelect(ssid) => {
+                self.wifi_selected = Some(ssid);
+                self.wifi_key = None;
+                self.next_frame = Instant::now();
+            }
+            // A wallpaper put on the desktop.
+            Target::SetWallpaper(path) => super::system_settings::set_wallpaper(&path),
+            // A Bluetooth pairing is the shell's to be trusted.
+            Target::BtPair(_name) => {
+                let uri = HSTRING::from("ms-settings:bluetooth");
+                unsafe { ShellExecuteW(Some(self.hwnd), w!("open"), &uri, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+            }
+            // Picking a device to show in the preview.
+            Target::BtSelect(addr) => {
+                self.bt_selected = Some(addr);
+                self.next_frame = Instant::now();
+            }
+            // Picking an adapter to show in the preview.
+            Target::NetSelect(name) => {
+                self.net_selected = Some(name);
+                self.next_frame = Instant::now();
+            }
+            // Picking a physical disk to show its volumes in the preview.
+            Target::StorageSelect(number) => {
+                self.storage_selected = Some(number);
+                self.next_frame = Instant::now();
+            }
+            // Picking a display to show in the preview.
+            Target::ScreenSelect(name) => {
+                self.display_selected = Some(name);
+                self.next_frame = Instant::now();
+            }
+            // A display told to wear a mode; left as it was if the driver will not draw it.
+            Target::ModeApply { device, wide, tall, hz } => {
+                crate::sys::set_mode(&device, crate::sys::Mode { wide, tall, hz });
+                self.next_frame = Instant::now();
+            }
+            // The night light warmed, or washed off at depth none.
+            Target::NightSet(level) => {
+                crate::sys::set_night(level);
+                self.next_frame = Instant::now();
+            }
+            // Another screen crowned as the one things start on; the layout read again.
+            Target::SetPrimary(device) => {
+                crate::sys::set_primary(&device);
+                self.screens = crate::screens::all();
+                self.next_frame = Instant::now();
+            }
+            // A display turned; left as it was where the driver will not draw it so.
+            Target::RotateSet { device, orient } => {
+                crate::sys::set_orientation(&device, orient);
+                self.next_frame = Instant::now();
+            }
+            // Picking a sound device to show in the preview.
+            Target::AudioSelect(id) => {
+                self.audio_selected = Some(id);
+                self.next_frame = Instant::now();
+            }
+            // A device's volume put as asked; the write done off-thread, the list read again when it lands.
+            Target::AudioVolume { id, percent } => {
+                crate::audio::set(&id, Some(percent), None);
+                self.next_frame = Instant::now();
+            }
+            // A device muted or unmuted, its volume otherwise left be.
+            Target::AudioMute { id, muted } => {
+                crate::audio::set(&id, None, Some(muted));
+                self.next_frame = Instant::now();
+            }
+            // Picking an app to show in the notification preview.
+            Target::NotifySelect(aumid) => {
+                self.notify_selected = Some(aumid);
+                self.next_frame = Instant::now();
+            }
+            // An app's banners let or held; the write done off-thread, the list read again when it lands.
+            Target::NotifyToggle { aumid, on } => {
+                crate::sys::notify_apply(aumid, on);
+                self.next_frame = Instant::now();
+            }
+            // The master switch on notices put on or off, the list read again when it lands.
+            Target::NotifyMaster(on) => {
+                crate::sys::notify_master_apply(on);
+                self.next_frame = Instant::now();
+            }
+            // The temporary files cleared, off-thread, the figures read again when it lands.
+            Target::CleanTemp => {
+                crate::sys::storage_clean();
+                self.next_frame = Instant::now();
+            }
+            // The recycle bin emptied, off-thread, the figures read again when it lands.
+            Target::EmptyRecycle => {
+                crate::sys::storage_empty();
+                self.next_frame = Instant::now();
+            }
+            // Storage sense put on or off, the window woken when it lands.
+            Target::StorageSenseApply(on) => {
+                crate::sys::storage_sense_apply(on);
+                self.next_frame = Instant::now();
+            }
+            // Picking a capability's apps to show in the privacy preview; the whole list is drawn under that head.
+            Target::ConsentSelect(capability, _display) => {
+                self.privacy_capability = capability;
+                self.next_frame = Instant::now();
+            }
+            // Letting or holding one app's use of a capability, the write done off-thread.
+            Target::ConsentSet { capability, keys, packaged, allow } => {
+                crate::sys::consent_apply(capability, keys, packaged, allow);
+                self.next_frame = Instant::now();
+            }
             // Slid by the pointer, stepped by the arrows; pressing alone does nothing more.
             Target::Grip(_) | Target::Slider(_) => {}
         }
@@ -4802,7 +6101,7 @@ impl Ui {
     fn stops(&self) -> Vec<Target> {
         let pages = NAV_ITEMS.iter().filter_map(|item| match item {
             NavItem::Page(page) => Some(Target::Nav(*page)),
-            NavItem::Components | NavItem::System => None,
+            _ => None,
         });
         let editor = if self.page == Page::Layout { self.editor_stops() } else { Vec::new() };
         pages.chain(self.layout().into_iter()
@@ -4852,7 +6151,16 @@ impl Ui {
                 Row::AddRecentFolder if self.choosing_folders.is_some() => vec![],
                 Row::AddRecentFolder => vec![Target::AddRecentFolder],
                 Row::Title | Row::Note(_) | Row::Info(_) => vec![],
+                Row::WifiNet(..) => vec![],
+                Row::BtDevice(..) => vec![],
+                Row::NetAdapter(..) => vec![],
+                Row::Screen(..) => vec![],
+                Row::AudioDevice(..) => vec![],
+                Row::NotifyApp(..) => vec![],
+                Row::ConsentApp(..) => vec![],
+                Row::Disk(..) => vec![],
                 Row::Do(d) => vec![d.what],
+                Row::Nav(.., target) => vec![target.clone()],
             }))
             .chain(editor)
             .collect()
@@ -5029,6 +6337,14 @@ impl Ui {
             return;
         }
         if !(NAV..NAV + self.pane()).contains(&x) {
+            // Past the list, on the 通用 hub: its right pane is what moves.
+            if self.page == Page::System && self.preview.is_some() {
+                let most = self.hub_most();
+                if most > 0.0 {
+                    self.hub_scroll_target = (self.hub_scroll_target - delta as f32 / 120.0 * WHEEL).clamp(0.0, most);
+                    self.next_frame = Instant::now();
+                }
+            }
             return;
         }
         let height = self.client().1;
@@ -5180,6 +6496,10 @@ impl Ui {
         if (self.nav_scroll_target - self.nav_scroll).abs() < 0.05 {
             self.nav_scroll = self.nav_scroll_target;
         }
+        self.hub_scroll += (self.hub_scroll_target - self.hub_scroll) * (1.0 - E.powf(-dt / SCROLL_EASE));
+        if (self.hub_scroll_target - self.hub_scroll).abs() < 0.05 {
+            self.hub_scroll = self.hub_scroll_target;
+        }
         let mut rect = RECT::default();
         unsafe {
             let _ = GetClientRect(self.hwnd, &mut rect);
@@ -5269,9 +6589,9 @@ impl Ui {
         NAV_ITEMS
             .iter()
             .map(|item| match item {
-                NavItem::Components | NavItem::System => NAV_GAP + NAV_HEADING,
                 NavItem::Page(Page::Phone) => NAV_ITEM + 4.0 + NAV_GAP,
                 NavItem::Page(_) => NAV_ITEM + 4.0,
+                _ => NAV_GAP + NAV_HEADING,
             })
             .sum()
     }
@@ -5294,13 +6614,13 @@ impl Ui {
         unsafe { frame.dc.PushAxisAlignedClip(&rect(0.0, top, NAV, (view - top).max(0.0)), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
         for item in NAV_ITEMS {
             let page = match item {
-                NavItem::Components | NavItem::System => {
+                NavItem::Page(page) => page,
+                _ => {
                     y += NAV_GAP;
                     text_centred(frame, item.name(lang), heading, palette.text3, left + 12.0, y + NAV_HEADING / 2.0, width, Align::Start);
                     y += NAV_HEADING;
                     continue;
                 }
-                NavItem::Page(page) => page,
             };
             if page == Page::Phone {
                 y += NAV_GAP / 2.0;
@@ -5780,6 +7100,26 @@ impl Ui {
                     let small = Font::new(Family::Segoe, 13.0, 600.0);
                     text_centred(frame, name, small, palette.text2, left + 4.0, y + row_height / 2.0, width, Align::Start);
                 }
+                // A row that leads somewhere else in this window: its name and a
+                // word under it, a chevron where a button would stand, and the
+                // whole card pressed — so its name is not said twice over.
+                Row::Nav(zh, en, hint_zh, hint_en, target) => {
+                    let here = matches!(target, Target::Preview(page) if self.preview == Some(page));
+                    self.leads_row(
+                        frame,
+                        palette,
+                        pick(lang, zh, en),
+                        Some(pick(lang, hint_zh, hint_en)),
+                        target,
+                        here,
+                        left,
+                        y,
+                        width,
+                        row_height,
+                        label,
+                        hint,
+                    );
+                }
                 Row::Code => {
                     card(frame, palette, left, y, width, row_height, palette.card);
                     if let Some((code, what)) = &self.code {
@@ -5813,6 +7153,146 @@ impl Ui {
                         right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
                     }
                     field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE);
+                }
+                // A network near: its wifi glyph, its name and state, and what can be done to it.
+                Row::WifiNet(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let (connected, ssid) = match &row {
+                        Row::WifiNet(ssid, _, _, _, _, connected) => (*connected, ssid.clone()),
+                        _ => (false, String::new()),
+                    };
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    // The wifi glyph, lit when this is the network joined.
+                    let ink = if connected { palette.selection } else { palette.text.alpha(0.85) };
+                    frame.icon(Icon::Wifi, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, ink);
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    // The row's body, left of its buttons, picks the network to show in the preview.
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::WifiSelect(ssid)));
+                }
+                // A device: its bluetooth glyph, its name and address, and where unpaired a button to ask Windows.
+                Row::BtDevice(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let addr = match &row {
+                        Row::BtDevice(_, addr, ..) => addr.clone(),
+                        _ => String::new(),
+                    };
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    frame.icon(Icon::Bluetooth, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, palette.text.alpha(0.85));
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::BtSelect(addr)));
+                }
+                // An adapter: its glyph lit by its state, its name and address; the body picks it for the preview.
+                Row::NetAdapter(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let up = matches!(&row, Row::NetAdapter(_, true, _));
+                    let current = matches!(&row, Row::NetAdapter(_, _, true));
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    let glyph = if current { palette.selection } else if up { palette.text.alpha(0.85) } else { palette.text3 };
+                    frame.icon(Icon::Network, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::NetSelect(name)));
+                }
+                // A display: its glyph lit when things start on it; the body picks it for the preview.
+                Row::Screen(..) => {
+                    let Some((title, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    // The row is picked by its GDI name, though it is titled by the monitor's own.
+                    let device = match &row {
+                        Row::Screen(d, _) => d.clone(),
+                        _ => continue,
+                    };
+                    let primary = matches!(&row, Row::Screen(_, true));
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    let glyph = if primary { palette.selection } else { palette.text.alpha(0.85) };
+                    frame.icon(Icon::AppWindow, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
+                    field_label(frame, palette, &title, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::ScreenSelect(device)));
+                }
+                // A sound device: its glyph lit when it is the default of its kind; the body picks it for the preview.
+                Row::AudioDevice(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let id = match &row {
+                        Row::AudioDevice(id, ..) => id.clone(),
+                        _ => continue,
+                    };
+                    let default = matches!(&row, Row::AudioDevice(_, _, true));
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    let glyph = if default { palette.selection } else { palette.text.alpha(0.85) };
+                    frame.icon(Icon::Volume, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::AudioSelect(id)));
+                }
+                // An app: its glyph lit when it is let; the body picks it for the preview.
+                Row::NotifyApp(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let aumid = match &row {
+                        Row::NotifyApp(_, aumid, _) => aumid.clone(),
+                        _ => continue,
+                    };
+                    let enabled = matches!(&row, Row::NotifyApp(_, _, true));
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    let glyph = if enabled { palette.selection } else { palette.text.alpha(0.85) };
+                    frame.icon(Icon::MessageCircle, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::NotifySelect(aumid)));
+                }
+                // An app's consent: its glyph lit when it is let; the body picks it for the preview.
+                Row::ConsentApp(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let allowed = matches!(&row, Row::ConsentApp(_, _, true));
+                    // The row is picked by its capability and name, so the preview shows this app under this reach.
+                    let (cap, display) = match &row {
+                        Row::ConsentApp(cap, display, _) => (cap.clone(), display.clone()),
+                        _ => continue,
+                    };
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    let glyph = if allowed { palette.selection } else { palette.text.alpha(0.85) };
+                    frame.icon(Icon::Shield, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::ConsentSelect(cap, display)));
+                }
+                // A physical disk: its glyph, its model and the room it holds; the body picks it for the preview.
+                Row::Disk(..) => {
+                    let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
+                    let number = match &row {
+                        Row::Disk(n, ..) => *n,
+                        _ => continue,
+                    };
+                    card(frame, palette, left, y, width, row_height, palette.card);
+                    let mut right = left + width - ROW_SIDE;
+                    for (text, target, kind) in buttons {
+                        right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
+                    }
+                    frame.icon(Icon::Disk, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, palette.text.alpha(0.85));
+                    field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::StorageSelect(number)));
                 }
             }
             if inside.is_some() {
@@ -5871,6 +7351,43 @@ impl Ui {
         let text_left = left + ITEM_INSET;
         field_label_line(frame, palette, &title, Some(&names.join(pick(self.lang, "、", ", "))), label, hint, text_left, cy, cx - 24.0 - text_left);
         self.targets.push((Rect { x: left, y, w: width, h: height }, Target::More));
+    }
+
+    /// A row that leads somewhere else in this window: its name and a word under
+    /// it, a chevron where a button would stand, and the whole card pressed — so
+    /// its name is not said twice over. The 通用 hub's rows use it; the card lit
+    /// with a ring is the sub-item whose preview the right pane shows.
+    #[allow(clippy::too_many_arguments)]
+    fn leads_row(
+        &mut self,
+        frame: &Frame,
+        palette: &Palette,
+        name: &str,
+        under: Option<&str>,
+        target: Target,
+        here: bool,
+        left: f32,
+        y: f32,
+        width: f32,
+        row_height: f32,
+        label: Font,
+        hint: Font,
+    ) {
+        let lit = self.hovered_now.as_ref() == Some(&target);
+        card(frame, palette, left, y, width, row_height, palette.card);
+        if lit && !here {
+            fill(frame, palette.hover, left, y, width, row_height, CARD_RADIUS);
+        }
+        if here {
+            stroke_inside(frame, Rect { x: left, y, w: width, h: row_height }, CARD_RADIUS, palette.selection);
+        }
+        let cy = y + row_height / 2.0;
+        let cx = left + width - ROW_SIDE - CHEVRON / 2.0;
+        frame.place(Matrix3x2::rotation_around(-90.0, Vector2 { X: cx, Y: cy }));
+        frame.icon(Icon::ChevronDown, Point { x: cx, y: cy }, CHEVRON, if here { palette.selection } else { palette.text3 });
+        frame.origin(0.0, 0.0);
+        field_label_in(frame, (if here { palette.selection } else { palette.text }, palette.text2), name, under, label, hint, left + ROW_SIDE, cy, width - 2.0 * ROW_SIDE - CHEVRON_ROOM);
+        self.targets.push((Rect { x: left, y, w: width, h: row_height }, target));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6427,14 +7944,49 @@ impl Ui {
     /// The preview: the panel as it will look over the desktop, running live.
     fn paint_preview(&mut self, frame: &Frame, palette: &Palette, width: f32, height: f32) -> Option<f32> {
         let lang = self.lang;
+        // On the 通用 hub, the sub-item whose preview the right pane shows; none
+        // till one is picked (see `leads_row`).
+        let hub = (self.page == Page::System).then(|| self.preview).flatten();
         let x0 = NAV + self.pane();
         let head = Font::new(Family::SegoeDisplay, 20.0, 600.0);
-        let title = if self.page == Page::Layout { pick(lang, "屏幕", "Screens") } else { pick(lang, "预览", "Preview") };
+        let title = if self.page == Page::Layout {
+            pick(lang, "屏幕", "Screens")
+        } else if self.page == Page::System {
+            match hub {
+                Some(page) => page.hub_name(lang),
+                None => pick(lang, "预览", "Preview"),
+            }
+        } else {
+            pick(lang, "预览", "Preview")
+        };
         text_centred(frame, title, head, palette.text, x0, PAD_TOP + 18.0, 200.0, Align::Start);
         let detail = match self.page {
+            Page::System => match hub {
+                Some(Page::About) => pick(lang, "硬件、系统版本与序列号", "Its hardware, system version and serial"),
+                Some(Page::Update) => pick(lang, "检查、下载与安装更新", "Checking for and installing updates"),
+                Some(Page::Storage) => pick(lang, "各磁盘的用量与清理", "What each drive holds, and clearing it"),
+                Some(Page::Startup) => pick(lang, "登录时启动的应用", "What starts of its own accord at sign-in"),
+                Some(Page::DateTime) => pick(lang, "时区、格式与校时", "The zone, the formats, the clock"),
+                Some(Page::Access) => pick(lang, "高对比度与文字大小", "High contrast and the text's size"),
+                Some(Page::Language) => pick(lang, "显示语言、格式与键盘", "The display language, its formats, the keyboard"),
+                Some(Page::Nearby) => pick(lang, "就近收发文件、跨机接续任务", "Files to a nearby PC, a task carried across"),
+                Some(Page::Sharing) => pick(lang, "文件夹与打印机的共享", "The folders and printers shared out"),
+                Some(Page::Backup) => pick(lang, "备份与还原", "Backup and restore"),
+                Some(Page::Recovery) => pick(lang, "开机修复与恢复环境", "Startup repair and the recovery tools"),
+                _ => pick(lang, "选一项看它的详情", "Pick one to see it here"),
+            },
             Page::Layout => pick(lang, "屏幕的排列与 Windows 设置一致，桌面为当前壁纸", "The screens as Windows arranges them, over your wallpaper"),
             Page::Phone => pick(lang, "手机上的 Glance", "Glance on the phone"),
             Page::Music => pick(lang, "正在播放的内容", "What plays now"),
+            Page::Network => pick(lang, "网卡与当前网速", "Adapters and the speed now"),
+            Page::Display => pick(lang, "分辨率、刷新、旋转与色彩", "Resolution, refresh, rotation and color"),
+            Page::Sound => pick(lang, "设备、音量与静音", "Devices, their volume, and muting"),
+            Page::Notifications => pick(lang, "哪些应用可打扰你", "Which apps may reach you"),
+            Page::Storage => pick(lang, "临时文件与回收站", "Temporary files and the recycle bin"),
+            Page::Privacy => pick(lang, "摄像头、麦克风与位置的授权", "Camera, microphone, and location consent"),
+            Page::Power => pick(lang, "电池与用电", "Battery and its power"),
+            Page::Gaming => pick(lang, "游戏模式与 DVR", "Game Mode and the DVR"),
+            Page::Appearance => pick(lang, "主题预览与确认", "Theme preview and confirm"),
             _ => pick(lang, "实时数据", "Live readings"),
         };
         let title_w = frame.gfx.measure(title, head);
@@ -6443,6 +7995,44 @@ impl Ui {
         let detail_x = x0 + title_w + 12.0;
         text_centred(frame, detail, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, detail_x, PAD_TOP + 20.0, (area.x + area.w - detail_x).max(0.0), Align::Start);
         if area.w <= 0.0 || area.h <= 0.0 {
+            return None;
+        }
+        // The 通用 hub: its right pane shows one sub-item's preview, drawn as that
+        // page's own preview is — the page pointed at for the while, taken back
+        // after. With none picked, a card to say so.
+        if self.page == Page::System {
+            match hub {
+                Some(page) => {
+                    let before = self.page;
+                    self.page = page;
+                    // Its cards are laid out whole, however far past the pane's bottom they
+                    // reach; the pane scrolls what does not fit. The scroll eased last frame
+                    // is set as a translation before the cards are drawn, so what they reach
+                    // moves with it; the clickables follow below.
+                    let scroll = self.hub_scroll.min(self.hub_most());
+                    self.hub_tall = 0.0;
+                    let painted = self.targets.len();
+                    unsafe { frame.dc.PushAxisAlignedClip(&rect(area.x, area.y, area.w, area.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+                    frame.origin(0.0, -scroll);
+                    match self.page {
+                        Page::About => self.paint_about_preview(frame, palette, area),
+                        Page::Update => self.paint_update_preview(frame, palette, area),
+                        Page::Storage => self.paint_storage_preview(frame, palette, area),
+                        Page::DateTime => self.paint_datetime_preview(frame, palette, area),
+                        _ => self.paint_os_plain(frame, palette, area),
+                    }
+                    frame.origin(0.0, 0.0);
+                    unsafe { frame.dc.PopAxisAlignedClip() };
+                    self.page = before;
+                    // How far the page's cards and the word under them reach past the pane's
+                    // bottom: that is what the pane may be scrolled through. A page that only
+                    // fills the pane is scrolled no further than its own size.
+                    let past = (self.drawn + self.hanging - (area.y + area.h)).max(0.0);
+                    self.hub_tall = area.h + past;
+                    self.hub_shifted(frame, palette, area, painted, scroll);
+                }
+                None => self.paint_hub_plain(frame, palette, area),
+            }
             return None;
         }
         // (The panel's and the music's previews frame what of the screen they show: see `shown_of`.)
@@ -6467,12 +8057,1925 @@ impl Ui {
             // (Its fans turn: drawn again some thirty times a second while they do.)
             return self.paint_phone(frame, area).then_some(7.5);
         }
+        // The system appearance page: theme gallery, preview, confirm.
+        if self.page == Page::Appearance {
+            self.paint_appearance_preview(frame, palette, area);
+            return None;
+        }
+        // The OS pages whose right-hand pane is drawn from live readings, not the panel preview.
+        match self.page {
+            Page::Wifi => self.paint_wifi_preview(frame, palette, area),
+            Page::Bluetooth => self.paint_bluetooth_preview(frame, palette, area),
+            Page::Network => self.paint_network_preview(frame, palette, area),
+            Page::Display => self.paint_display_preview(frame, palette, area),
+            Page::Sound => self.paint_sound_preview(frame, palette, area),
+            Page::Notifications => self.paint_notify_preview(frame, palette, area),
+            Page::Storage => self.paint_storage_preview(frame, palette, area),
+            Page::Privacy => self.paint_privacy_preview(frame, palette, area),
+            Page::Gaming => self.paint_gaming_preview(frame, palette, area),
+            Page::Power => self.paint_power_preview(frame, palette, area),
+            Page::ScreenTime => self.paint_screen_time_preview(frame, palette, area),
+            Page::Wallpaper => self.paint_wallpaper_preview(frame, palette, area),
+            _ => {}
+        }
+        if matches!(self.page, Page::Wifi | Page::Bluetooth | Page::Network | Page::Display | Page::Sound | Page::Notifications | Page::Storage | Page::Privacy | Page::Gaming | Page::Power | Page::ScreenTime | Page::Wallpaper) {
+            return None;
+        }
 
         // The readings (or the workbench), laid out for the screen the window opened on, centred along the edge they
         // open from.
         let prefs = self.prefs.clone().holding(self.previewed());
         let edge = self.preview_edge();
         self.panel_on_stage(frame, area, Some(edge), Some(&prefs), false).0
+    }
+
+    /// The system appearance page's preview: Windows-style theme thumbnail grid.
+    fn paint_appearance_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        // Card background.
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 18.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let listed = super::system_settings::themes();
+        let (_, worn) = super::system_settings::theme_choices();
+        let picked = self.theme_picked.or(worn);
+
+        // --- Heading ---
+        let heading_font = Font::new(Family::Segoe, 15.0, 600.0);
+        text_centred(frame, &p("选择主题", "Choose a theme"), heading_font, palette.text, inner.x, inner.y, inner.w, Align::Start);
+
+        // --- Grid of theme cards (Windows-style: wallpaper thumbnail + name below) ---
+        let grid_top = inner.y + 30.0;
+        let gap = 10.0;
+        let name_h = 22.0;
+        // Card dimensions: adapt columns to available width.
+        let card_w = 150.0_f32;
+        let card_h = 84.0_f32; // 16:9-ish wallpaper preview
+        let cell_w = card_w + gap;
+        let cell_h = card_h + name_h + gap;
+        let cols = ((inner.w + gap) / cell_w).floor().max(1.0) as usize;
+        let total_grid_w = cols as f32 * cell_w - gap;
+        let grid_x0 = inner.x + (inner.w - total_grid_w) / 2.0;
+
+        for (i, (name, path)) in listed.iter().enumerate() {
+            let row = i / cols;
+            let col = i % cols;
+            let cx = grid_x0 + col as f32 * cell_w;
+            let cy = grid_top + row as f32 * cell_h;
+            // Stop if beyond area.
+            if cy + cell_h > inner.y + inner.h - 40.0 {
+                break;
+            }
+            let is_picked = picked == Some(i);
+
+            // Thumbnail card background.
+            let radius = 6.0;
+            fill(frame, palette.control, cx, cy, card_w, card_h, radius);
+
+            // Try to load the wallpaper image.
+            let wallpaper = super::system_settings::theme_wallpaper(path);
+            if let Some(ref wp) = wallpaper {
+                let side = (card_w * 2.0) as u32; // ask for physical px
+                if let Some(pic) = crate::station::thumbs::of(std::path::Path::new(wp), side) {
+                    frame.picture(&pic, cx, cy, card_w, card_h, radius, 1.0);
+                } else {
+                    // Still loading: gradient placeholder.
+                    fill(frame, palette.hover, cx, cy, card_w, card_h, radius);
+                }
+            } else {
+                fill(frame, palette.hover, cx, cy, card_w, card_h, radius);
+            }
+
+            // Selection border (accent ring).
+            if is_picked {
+                let sel = Rect { x: cx - 1.5, y: cy - 1.5, w: card_w + 3.0, h: card_h + 3.0 };
+                Canvas::stroke_rounded(frame, crate::ui::canvas::Fill::Solid(palette.selection), sel.x, sel.y, sel.w, sel.h, radius + 1.5, 2.5);
+            } else {
+                stroke_inside(frame, Rect { x: cx, y: cy, w: card_w, h: card_h }, radius, palette.card_stroke);
+            }
+
+            // Theme name below the card.
+            let name_font = Font::new(Family::Segoe, 11.5, if is_picked { 600.0 } else { 400.0 });
+            let name_colour = if is_picked { palette.text } else { palette.text2 };
+            let name_y = cy + card_h + 4.0;
+            text_centred(frame, name, name_font, name_colour, cx, name_y + name_h / 2.0, card_w, Align::Start);
+
+            // Click target covers the whole cell.
+            let hit = Rect { x: cx, y: cy, w: card_w, h: card_h + name_h };
+            self.targets.push((hit, Target::ThemePick(i)));
+        }
+
+        // --- Confirm button at bottom right ---
+        let can_confirm = self.theme_picked.is_some();
+        let btn_style = if can_confirm { Button::Accent } else { Button::Quiet };
+        let btn_label = p("应用", "Apply");
+        let btn_right = inner.x + inner.w;
+        let btn_cy = inner.y + inner.h - 16.0;
+        self.button(frame, palette, &btn_label, btn_right, btn_cy, Target::ThemeConfirm, btn_style, &None);
+        // Record the changes count so we know when new thumbs arrive.
+        self.theme_thumbs = crate::station::thumbs::changes();
+    }
+
+    /// The profile kept for the network shown in the preview: the picked one by name, else the joined one.
+    fn wifi_chosen_profile(&self) -> Option<String> {
+        let shot = crate::wifi::snapshot()?;
+        if let Some(name) = &self.wifi_selected {
+            if let Some(profile) = shot
+                .nets
+                .iter()
+                .chain(shot.saved.iter())
+                .find(|n| n.ssid.eq_ignore_ascii_case(name))
+                .map(|n| n.profile.clone())
+                .filter(|p| !p.is_empty())
+            {
+                return Some(profile);
+            }
+        }
+        shot.details.map(|d| d.profile).filter(|p| !p.is_empty())
+    }
+
+    /// Wi-Fi's preview: the network picked at the left (or the one joined now, where none is picked) —
+    /// its signal, and where joined its channel and rates, its security, and the key kept for it (shown once asked).
+    fn paint_wifi_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let Some(shot) = crate::wifi::snapshot() else {
+            say(&p("正在扫描无线网络…", "Scanning for networks…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1000);
+            return;
+        };
+        if !shot.on {
+            say(&p("WLAN 已关闭，请先在左侧打开", "Wi-Fi is off — switch it on at the left"));
+            return;
+        }
+        // The network shown: the one picked by name, else the one joined now.
+        let chosen = match &self.wifi_selected {
+            Some(name) => shot.nets.iter().chain(shot.saved.iter()).find(|n| n.ssid.eq_ignore_ascii_case(name)).cloned(),
+            None => shot.nets.iter().find(|n| n.connected).cloned(),
+        };
+        let Some(net) = chosen else {
+            say(&p("点左侧的网络以查看其信息与密码", "Pick a network at the left to see its details and key"));
+            return;
+        };
+        // The live readouts, only where this is the network joined now.
+        let live = if net.connected { shot.details.clone() } else { None };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let name = Font::new(Family::Segoe, 13.5, 400.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        let mut y = inner.y;
+        text_centred(frame, &net.ssid, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 34.0;
+        if net.connected && !shot.adapter.is_empty() {
+            text_centred(frame, &shot.adapter, Font::new(Family::Segoe, 12.0, 400.0), palette.text3, inner.x, y + 6.0, inner.w, Align::Start);
+            y += 22.0;
+        }
+        let mbps = |rate: u32| -> String {
+            if rate == 0 {
+                return p("无", "—");
+            }
+            let m = rate as f64 / 1_000_000.0;
+            if m >= 1.0 { format!("{m:.0} {}", p("Mbps", "Mbps")) } else { format!("{:.0} {}", rate as f64 / 1000.0, p("Kbps", "Kbps")) }
+        };
+        let line = |label: String, shown: String, y: &mut f32| {
+            text_centred(frame, &label, name, palette.text2, inner.x, *y + 12.0, inner.w * 0.5, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 12.0, inner.w * 0.5, Align::End);
+            *y += 30.0;
+        };
+        let state = if net.connected {
+            p("已连接", "Connected")
+        } else if net.known {
+            p("已保存", "Saved")
+        } else {
+            p("未连接", "Not connected")
+        };
+        line(p("状态", "Status"), state, &mut y);
+        if net.signal > 0 {
+            line(p("信号", "Signal"), format!("{}%", net.signal), &mut y);
+            line(p("安全", "Security"), if net.secure { p("已加密", "Secured") } else { p("开放", "Open") }, &mut y);
+        }
+        if let Some(d) = &live {
+            if d.channel > 0 {
+                line(p("信道", "Channel"), format!("{}", d.channel), &mut y);
+            }
+            line(p("频段接收", "Download"), mbps(d.rx), &mut y);
+            line(p("频段发送", "Upload"), mbps(d.tx), &mut y);
+        }
+        // The key kept for it, masked until asked; read from its profile (see `crate::wifi::password`).
+        y += 6.0;
+        if net.profile.is_empty() {
+            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
+            text_centred(frame, &p("连接后才会保存密码", "Its key is kept only once joined"), value, palette.text3, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.6, Align::Start);
+        } else {
+            let shown = self.wifi_key.clone();
+            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
+            let key_text = match &shown {
+                Some(key) if !key.is_empty() => key.clone(),
+                Some(_) => p("无法读取（需管理员权限）", "Cannot be read (needs administrator)"),
+                None => "••••••••".to_string(),
+            };
+            text_centred(frame, &key_text, value, palette.text, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.5 - 8.0, Align::Start);
+            let word = if shown.is_some() { p("隐藏", "Hide") } else { p("显示密码", "Show password") };
+            self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::WifiKey, Button::Plain, &None);
+            y += 40.0;
+        }
+        // The network joined now can be let go of here, without forgetting it.
+        if net.connected {
+            self.button(frame, palette, &p("断开连接", "Disconnect"), inner.x + inner.w, y + 6.0, Target::WifiDisconnect, Button::Quiet, &None);
+        }
+    }
+
+    /// Bluetooth's preview: the devices kept, and those an inquiry found near; each press opens
+    /// Windows' own page to be trusted there. (The snapshot is read off-thread.)
+    fn paint_bluetooth_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let Some(shot) = crate::bluetooth::snapshot() else {
+            say(&p("正在读取蓝牙设备…", "Reading Bluetooth devices…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+            return;
+        };
+        if shot.radios == 0 {
+            say(&p("本机没有蓝牙无线电", "This PC has no Bluetooth radio"));
+            return;
+        }
+        // The device shown: the one picked by address, else the first kept.
+        let chosen = match &self.bt_selected {
+            Some(addr) => shot.paired.iter().chain(shot.nearby.iter()).find(|d| &d.addr == addr).cloned(),
+            None => shot.paired.first().cloned(),
+        };
+        let Some(d) = chosen else {
+            say(&p("点左侧的设备以查看其信息", "Pick a device at the left to see its details"));
+            return;
+        };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let name = Font::new(Family::Segoe, 13.5, 400.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        let mut y = inner.y;
+        text_centred(frame, &d.name, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 34.0;
+        let line = |label: String, shown: String, y: &mut f32| {
+            text_centred(frame, &label, name, palette.text2, inner.x, *y + 12.0, inner.w * 0.5, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 12.0, inner.w * 0.5, Align::End);
+            *y += 30.0;
+        };
+        line(p("地址", "Address"), d.addr.clone(), &mut y);
+        let state = if d.connected {
+            p("已连接", "Connected")
+        } else if d.remembered {
+            p("已配对", "Paired")
+        } else {
+            p("未配对", "Not paired")
+        };
+        line(p("状态", "Status"), state, &mut y);
+        // An unpaired device is asked of Windows; a kept one is opened there to be managed.
+        let word = if d.remembered { p("在系统中管理", "Manage in Windows") } else { p("配对", "Pair") };
+        self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::BtPair(d.name.clone()), Button::Plain, &None);
+    }
+
+    /// Display's preview, laid out as macOS' Displays pane: the screens as a row of
+    /// wallpapered thumbnails to pick from, then what the picked one is used as, the
+    /// resolutions as scaled desktops (larger text to more space), the refresh and the
+    /// rotation as segmented choices that write back, and the colour profile and HDR read
+    /// only — a press there leads to Windows' own page. The scale and night light stay below.
+    fn paint_display_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        if self.screens.is_empty() {
+            say(&p("没有读到显示器。", "No display was read."));
+            return;
+        }
+        // Each screen gathered whole first: the preview leans on its own buttons between
+        // reads, so none of the list is left borrowed across them.
+        let mut cards: Vec<(String, bool, Option<crate::sys::Mode>)> = Vec::new();
+        for s in &self.screens {
+            let device = crate::sys::device_of(&s.monitor);
+            let cur = crate::sys::current(&device);
+            cards.push((device, s.primary, cur));
+        }
+        // The screen shown: the picked one by name, else the main, else the first.
+        let idx = self
+            .display_selected
+            .as_ref()
+            .and_then(|name| cards.iter().position(|(device, ..)| *device == *name))
+            .unwrap_or_else(|| cards.iter().position(|(_, primary, _)| *primary).unwrap_or(0));
+        let device = cards[idx].0.clone();
+        let primary = cards[idx].1;
+        let here = cards[idx].2;
+        let (cw, ch) = here.map(|c| (c.wide, c.tall)).unwrap_or((0, 0));
+        let now_hz = here.map(|c| c.hz).unwrap_or(0);
+        let modes = crate::sys::modes(&device);
+        let orient = crate::sys::orientation(&device);
+        // The wallpaper every screen and every size card is filled with, taken once; while
+        // it is still read a held colour stands in, so nothing is left blank.
+        let wall = super::wallpaper::current_path().and_then(|path| crate::station::thumbs::of(std::path::Path::new(&path), 512));
+        let label = Font::new(Family::Segoe, 13.0, 600.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        let small = Font::new(Family::Segoe, 12.0, 400.0);
+        let mut y = inner.y;
+
+        // The screens as macOS lays them out: a row of pictures, each kept to its own shape,
+        // the one worn marked; a press here picks which screen the rest of the pane is about.
+        text_centred(frame, &p("显示器", "Displays"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
+        self.button(frame, palette, &p("排列…", "Arrange…"), inner.x + inner.w, y + 16.0, Target::Open("ms-settings:display".into()), Button::Plain, &None);
+        y += 30.0;
+        let n = cards.len();
+        let gap = 16.0;
+        let cell = ((inner.w - gap * (n as f32 - 1.0)) / n as f32).max(60.0);
+        let box_h = 84.0;
+        for (at, (name, is_primary, cur)) in cards.iter().enumerate() {
+            let cx = inner.x + at as f32 * (cell + gap);
+            let (pw, ph) = match cur {
+                Some(m) => {
+                    let (mut w, mut h) = (m.wide as f32, m.tall as f32);
+                    if orient == 1 || orient == 3 {
+                        std::mem::swap(&mut w, &mut h);
+                    }
+                    (w, h)
+                }
+                None => (16.0, 9.0),
+            };
+            let fit = (cell / pw).min(box_h / ph);
+            let (mw, mh) = (pw * fit, ph * fit);
+            let (mx, my) = (cx + (cell - mw) / 2.0, y + (box_h - mh) / 2.0);
+            let chosen = at == idx;
+            match &wall {
+                Some(pic) => frame.picture(pic, mx, my, mw, mh, 4.0, 1.0),
+                None => fill(frame, palette.hover, mx, my, mw, mh, 4.0),
+            }
+            stroke_inside(frame, Rect { x: mx, y: my, w: mw, h: mh }, 4.0, if chosen { palette.selection } else { palette.card_stroke });
+            let said = crate::sys::friendly(name);
+            let under = if *is_primary { format!("{} · {}", said, p("主", "Main")) } else { said };
+            let tw = frame.gfx.measure(&under, small);
+            text_centred(frame, &under, small, if chosen { palette.text } else { palette.text2 }, cx + (cell - tw) / 2.0, y + box_h + 12.0, tw, Align::Start);
+            self.targets.push((Rect { x: cx, y, w: cell, h: box_h + 20.0 }, Target::ScreenSelect(name.clone())));
+        }
+        y += box_h + 30.0;
+
+        // What this screen is for; another may be crowned the one things start on.
+        text_centred(frame, &p("用作", "Use as"), label, palette.text, inner.x, y + 14.0, inner.w * 0.4, Align::Start);
+        if primary {
+            text_centred(frame, &p("主显示器", "Main display"), value, palette.text2, inner.x + inner.w * 0.4, y + 14.0, inner.w * 0.6, Align::End);
+        } else {
+            self.button(frame, palette, &p("设为主显示器", "Make main"), inner.x + inner.w, y + 14.0, Target::SetPrimary(device.clone()), Button::Plain, &None);
+        }
+        y += 34.0;
+
+        // The sizes as macOS shows them: not a list of figures but the desktop itself at each,
+        // its word growing as the pixels thin — the left end larger text, the right more space.
+        text_centred(frame, &p("分辨率", "Resolution"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
+        y += 24.0;
+        if modes.is_empty() {
+            text_centred(frame, &p("该显示器未回报可选的分辨率", "This display reports no modes to choose"), small, palette.text3, inner.x, y + 6.0, inner.w, Align::Start);
+            y += 24.0;
+        } else {
+            let total = modes.len();
+            let picks: Vec<usize> = if total <= 5 {
+                (0..total).collect()
+            } else {
+                (0..5).map(|k| (k as f32 * (total - 1) as f32 / 4.0).round() as usize).collect()
+            };
+            let maxpix = modes.first().map(|m| m.wide as f32 * m.tall as f32).unwrap_or(1.0).max(1.0);
+            let rgap = 10.0;
+            let rcw = ((inner.w - rgap * (picks.len() as f32 - 1.0)) / picks.len() as f32).max(48.0);
+            let rch = 58.0;
+            for (k, &mi) in picks.iter().enumerate() {
+                let m = modes[mi];
+                let cx = inner.x + k as f32 * (rcw + rgap);
+                match &wall {
+                    Some(pic) => frame.picture(pic, cx, y, rcw, rch, 5.0, 1.0),
+                    None => fill(frame, palette.hover, cx, y, rcw, rch, 5.0),
+                }
+                // A mock window whose bulk grows as the pixels thin, so a smaller size reads
+                // as bigger text before its numbers are read at all.
+                let grow = (maxpix / (m.wide as f32 * m.tall as f32).max(1.0)).clamp(0.6, 1.8);
+                let (ww, wh) = ((rcw * 0.5 * grow).min(rcw - 8.0), (rch * 0.42 * grow).min(rch - 8.0));
+                let (wx, wy) = (cx + (rcw - ww) / 2.0, y + (rch - wh) / 2.0);
+                fill(frame, Color::hex(0x1c1c1c, 0.55), wx, wy, ww, wh, 3.0);
+                fill(frame, Color::hex(0xffffff, 0.7), wx + 4.0, wy + 4.0, (ww * 0.3).max(3.0), (2.0 * grow).min(wh - 8.0).max(1.0), 1.0);
+                let worn = here.is_some_and(|c| c.wide == m.wide && c.tall == m.tall);
+                stroke_inside(frame, Rect { x: cx, y, w: rcw, h: rch }, 5.0, if worn { palette.selection } else { palette.card_stroke });
+                self.targets.push((Rect { x: cx, y, w: rcw, h: rch }, Target::ModeApply { device: device.clone(), wide: m.wide, tall: m.tall, hz: now_hz }));
+            }
+            y += rch + 4.0;
+            text_centred(frame, &p("更大字体", "Larger Text"), small, palette.text3, inner.x, y + 8.0, inner.w * 0.5, Align::Start);
+            text_centred(frame, &p("更多空间", "More Space"), small, palette.text3, inner.x + inner.w * 0.5, y + 8.0, inner.w * 0.5, Align::End);
+            y += 22.0;
+        }
+
+        // The rates this size will draw at, the worn one marked; a press keeps the size and
+        // takes the rate. Where only one is offered, it is said rather than chosen.
+        let rates = here.map(|c| crate::sys::refreshes(&device, c.wide, c.tall)).unwrap_or_default();
+        text_centred(frame, &p("刷新率", "Refresh"), label, palette.text, inner.x, y + 14.0, inner.w * 0.4, Align::Start);
+        if rates.len() <= 1 {
+            let said = here.map(|c| format!("{} Hz", c.hz)).unwrap_or_else(|| p("未知", "Unknown"));
+            text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.4, y + 14.0, inner.w * 0.6, Align::End);
+        } else {
+            let mut right = inner.x + inner.w;
+            for hz in rates.iter().rev() {
+                let kind = if *hz == now_hz { Button::Accent } else { Button::Plain };
+                right = self.button(frame, palette, &format!("{hz} Hz"), right, y + 14.0, Target::ModeApply { device: device.clone(), wide: cw, tall: ch, hz: *hz }, kind, &None) - 8.0;
+            }
+        }
+        y += 34.0;
+
+        // The way round the screen is drawn, four turns; a driver that will not take one keeps
+        // the screen as it was.
+        text_centred(frame, &p("旋转", "Rotation"), label, palette.text, inner.x, y + 14.0, inner.w * 0.3, Align::Start);
+        let mut right = inner.x + inner.w;
+        for (word, want) in [(p("倒置", "Upside down"), 3u32), (p("翻转", "Flipped"), 2), (p("竖屏", "Portrait"), 1), (p("标准", "Standard"), 0)] {
+            let kind = if orient == want { Button::Accent } else { Button::Plain };
+            right = self.button(frame, palette, &word, right, y + 14.0, Target::RotateSet { device: device.clone(), orient: want }, kind, &None) - 8.0;
+        }
+        y += 34.0;
+
+        // The colour profile and the high dynamic range are the system's to set; here they are
+        // only read (a profile by its file) and pressed to Windows' own page.
+        let prof = crate::sys::color_profile(&device);
+        let said = if prof.is_empty() { p("未关联", "None") } else { prof };
+        text_centred(frame, &p("颜色描述文件", "Colour profile"), label, palette.text, inner.x, y + 14.0, inner.w * 0.45, Align::Start);
+        text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.45, y + 14.0, inner.w * 0.55, Align::End);
+        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 28.0 }, Target::Open("ms-settings:display".into())));
+        y += 30.0;
+        text_centred(frame, &p("高动态范围", "High dynamic range"), label, palette.text, inner.x, y + 14.0, inner.w * 0.55, Align::Start);
+        text_centred(frame, &p("在系统中设置", "Set in Windows"), value, palette.text2, inner.x + inner.w * 0.55, y + 14.0, inner.w * 0.45, Align::End);
+        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 28.0 }, Target::Open("ms-settings:display".into())));
+        y += 30.0;
+
+        // The desktop's growth, read only — Windows lays it out at once, so it is left to the
+        // system's page — and the night light, warmed here and washed off by itself.
+        let scale = crate::sys::scale();
+        text_centred(frame, &p("缩放", "Scale"), value, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
+        text_centred(frame, &format!("{scale}%"), value, palette.text, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.6, Align::End);
+        y += 30.0;
+        text_centred(frame, &p("夜间光照", "Night light"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
+        y += 24.0;
+        let now_night = crate::sys::night();
+        let mut right = inner.x + inner.w;
+        for (level, word) in [(3u32, p("浓", "Strong")), (2, p("中", "Medium")), (1, p("淡", "Faint")), (0, p("关", "Off"))] {
+            let kind = if now_night == level { Button::Accent } else { Button::Plain };
+            right = self.button(frame, palette, &word, right, y + 12.0, Target::NightSet(level), kind, &None) - 8.0;
+        }
+    }
+
+    /// Sound's preview: the device picked at the left (or the default one things play through), its
+    /// volume as a track to set by the twenty steps along it, and its mute. Formats and enhancements
+    /// stay Windows' own, so the row's button leads there.
+    fn paint_sound_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let Some(shot) = crate::audio::snapshot() else {
+            say(&p("正在读取音频设备…", "Reading the sound devices…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+            return;
+        };
+        if shot.devices.is_empty() {
+            say(&p("没有发现音频设备。", "No sound devices were found."));
+            return;
+        }
+        // The device shown: the picked one by id, else the default that plays, else the first that plays, else the first.
+        let chosen = match &self.audio_selected {
+            Some(id) => shot.devices.iter().find(|d| &d.id == id).cloned(),
+            None => None,
+        }
+        .or_else(|| shot.devices.iter().find(|d| d.render && d.default).cloned())
+        .or_else(|| shot.devices.iter().find(|d| d.render).cloned())
+        .or_else(|| shot.devices.first().cloned());
+        let Some(d) = chosen else { return };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let small = Font::new(Family::Segoe, 12.0, 400.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        let mut y = inner.y;
+        text_centred(frame, &d.name, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 30.0;
+        let mut where_ = if d.render { p("输出", "Output") } else { p("输入", "Input") };
+        if d.default {
+            where_ = format!("{where_} · {}", p("默认", "Default"));
+        }
+        text_centred(frame, &where_, small, palette.text3, inner.x, y + 4.0, inner.w, Align::Start);
+        y += 34.0;
+        // The volume, as a track filled to where it stands, and set by the twenty steps along it.
+        text_centred(frame, &p("音量", "Volume"), value, palette.text2, inner.x, y + 10.0, inner.w * 0.4, Align::Start);
+        let shown = if d.muted { p("已静音", "Muted") } else { format!("{}%", d.volume) };
+        text_centred(frame, &shown, value, if d.muted { palette.text3 } else { palette.text }, inner.x + inner.w * 0.4, y + 10.0, inner.w * 0.6, Align::End);
+        y += 28.0;
+        let track_h = 8.0;
+        fill(frame, palette.control, inner.x, y, inner.w, track_h, 4.0);
+        let fill_w = inner.w * d.volume.min(100) as f32 / 100.0;
+        if fill_w > 0.0 {
+            fill(frame, if d.muted { palette.text3 } else { palette.selection }, inner.x, y, fill_w, track_h, 4.0);
+        }
+        let knob_x = (inner.x + fill_w - 7.0).max(inner.x);
+        fill(frame, if d.muted { palette.text3 } else { palette.selection }, knob_x, y - 3.0, 14.0, 14.0, 7.0);
+        let steps = 20u32;
+        let seg = inner.w / steps as f32;
+        for j in 0..steps {
+            let percent = (j + 1) * 5;
+            let r = Rect { x: inner.x + j as f32 * seg, y: y - 8.0, w: seg, h: track_h + 16.0 };
+            self.targets.push((r, Target::AudioVolume { id: d.id.clone(), percent }));
+        }
+        y += 34.0;
+        // Muting, or lifting the mute — the one thing besides volume the mixer keeps here.
+        let word = if d.muted { p("取消静音", "Unmute") } else { p("静音", "Mute") };
+        let kind = if d.muted { Button::Accent } else { Button::Plain };
+        self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::AudioMute { id: d.id.clone(), muted: !d.muted }, kind, &None);
+    }
+
+    /// Notifications' preview: the master switch, then the app picked at the left and whether its
+    /// banners are let. The banner and lock-screen styles are Windows' own, so the row's button leads there.
+    fn paint_notify_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let mut y = inner.y;
+        // The master switch: notices let at all, or held from every app at once.
+        text_centred(frame, &p("通知", "Notifications"), Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 26.0;
+        let master = crate::sys::notify_master();
+        let mut right = inner.x + inner.w;
+        for (on, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
+            let kind = if master == on { Button::Accent } else { Button::Plain };
+            right = self.button(frame, palette, &word, right, y + 12.0, Target::NotifyMaster(on), kind, &None) - 8.0;
+        }
+        y += 34.0;
+        let Some(apps) = crate::sys::notify_snapshot() else {
+            say(&p("正在读取通知设置…", "Reading the notification settings…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+            return;
+        };
+        if apps.is_empty() {
+            say(&p("没有应用留下通知设置。", "No app has left a notification setting."));
+            return;
+        }
+        // The app shown: the picked one by id, else the first.
+        let chosen = match &self.notify_selected {
+            Some(id) => apps.iter().find(|a| &a.aumid == id).cloned(),
+            None => None,
+        }
+        .or_else(|| apps.first().cloned());
+        let Some(a) = chosen else { return };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let small = Font::new(Family::Segoe, 12.0, 400.0);
+        text_centred(frame, &a.display, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 30.0;
+        let state = if a.enabled { p("允许通知", "Allowed") } else { p("已禁止", "Off") };
+        text_centred(frame, &state, small, if a.enabled { palette.selection } else { palette.text3 }, inner.x, y + 4.0, inner.w, Align::Start);
+        y += 30.0;
+        // Letting the app's banners, or holding them.
+        let word = if a.enabled { p("禁止通知", "Turn off") } else { p("允许通知", "Turn on") };
+        self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::NotifyToggle { aumid: a.aumid.clone(), on: !a.enabled }, Button::Plain, &None);
+    }
+
+    /// Storage's preview: the room the temporary files take and the recycle bin's, each with the
+    /// button that frees it (the walk and the emptying done off-thread), and storage sense — the
+    /// tidying Windows does of its own — put on or off. Per-drive totals and sense's own rules stay
+    /// Windows', so the row's button leads there.
+    fn paint_storage_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        // A name at the left of a row and its figures at the right, the two columns kept
+        // the width apart that the words of the left need.
+        let line = |label: String, shown: String, y: &mut f32| {
+            text_centred(frame, &label, value, palette.text2, inner.x, *y + 10.0, inner.w * 0.4, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.4, *y + 10.0, inner.w * 0.6, Align::End);
+            *y += 30.0;
+        };
+        let mut y = inner.y;
+        // The disk picked at the left (the first when none is yet), and each letter mounted on it: the
+        // room taken and the room held, asked of the volume's root, which answers at once — nothing is
+        // walked, so the frame may wait on it.
+        text_centred(frame, &p("磁盘", "Drives"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 34.0;
+        let disks = super::system_settings::disks();
+        let chosen = self
+            .storage_selected
+            .and_then(|n| disks.iter().find(|d| d.number == n))
+            .or(disks.first());
+        match chosen {
+            None => {
+                text_centred(frame, &p("没读到可用的磁盘。", "No drive could be read."), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y, inner.w, Align::Start);
+                y += 30.0;
+            }
+            Some(disk) => {
+                let word = if disk.model.is_empty() { format!("{} {}", p("磁盘", "Disk"), disk.number) } else { disk.model.clone() };
+                text_centred(frame, &format!("{word} · {}", human_bytes(disk.size)), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y + 4.0, inner.w, Align::Start);
+                y += 26.0;
+                for (name, used, total) in &disk.volumes {
+                    line(name.clone(), super::text::usage(*used, *total), &mut y);
+                }
+            }
+        }
+        y += 14.0;
+        match crate::sys::storage_snapshot() {
+            Some(shot) => {
+                // The temporary files, and the button that frees what is not locked.
+                text_centred(frame, &p("临时文件", "Temporary files"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+                text_centred(frame, &human_bytes(shot.temp), value, palette.text, inner.x + inner.w * 0.5, y + 10.0, inner.w * 0.5, Align::End);
+                y += 34.0;
+                self.button(frame, palette, &p("清理临时文件", "Clear temporary files"), inner.x + inner.w, y + 8.0, Target::CleanTemp, Button::Plain, &None);
+                y += 34.0;
+                // The recycle bin, and the button that empties it.
+                text_centred(frame, &p("回收站", "Recycle bin"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+                text_centred(frame, &format!("{} · {} {}", human_bytes(shot.recycle_bytes), shot.recycle_count, p("项", "items")), value, palette.text, inner.x + inner.w * 0.4, y + 10.0, inner.w * 0.6, Align::End);
+                y += 34.0;
+                self.button(frame, palette, &p("清空回收站", "Empty recycle bin"), inner.x + inner.w, y + 8.0, Target::EmptyRecycle, Button::Plain, &None);
+            }
+            None => {
+                say(&p("正在统计磁盘占用…", "Tallying what the disk holds…"));
+                self.next_frame = Instant::now() + Duration::from_millis(1500);
+            }
+        }
+        y += 44.0;
+        // Storage sense: the tidying Windows does of its own.
+        text_centred(frame, &p("存储感知", "Storage Sense"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 30.0;
+        let sense = crate::sys::storage_sense();
+        let mut right = inner.x + inner.w;
+        for (on, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
+            let kind = if sense == on { Button::Accent } else { Button::Plain };
+            right = self.button(frame, palette, &word, right, y + 12.0, Target::StorageSenseApply(on), kind, &None) - 8.0;
+        }
+    }
+
+    /// Privacy's preview: the apps that have asked for the capability its rows sit under, each on a
+    /// line of its own with the switch that lets or holds it back. The capabilities are split in the
+    /// middle column; the one picked there names the head. The reading runs PowerShell, so it is
+    /// taken off-thread. The other categories stay Windows' own.
+    fn paint_privacy_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        self.hanging = 0.0;
+        let mut y = inner.y;
+        let capability = self.privacy_capability.clone();
+        // The reach the picked app's row sits under, named at the head — the middle column has split by it.
+        let reach = match capability.as_str() {
+            "Location" => p("位置", "Location"),
+            "Microphone" => p("麦克风", "Microphone"),
+            _ => p("摄像头", "Camera"),
+        };
+        text_centred(frame, &reach, Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 34.0;
+        let Some(apps) = crate::sys::consent_snapshot(&capability) else {
+            say(&p("正在读取授权…", "Reading the permissions…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+            return;
+        };
+        if apps.is_empty() {
+            say(&p("没有应用就这项权限留下记录。", "No app has left a mark for this permission."));
+            return;
+        }
+        // One line per app, kept together under hairlines: its name, whether it is let now, and
+        // the pair of buttons that lets or holds it back. What does not fit the pane is scrolled
+        // through, as the hub's cards are; the reach past its bottom is told for the scroll.
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let small = Font::new(Family::Segoe, HINT, 400.0);
+        let row = 46.0;
+        for a in apps {
+            if y > inner.y {
+                fill(frame, palette.rule, inner.x, y, inner.w, 1.0, 0.0);
+            }
+            text_centred(frame, &a.display, font, palette.text, inner.x, y + row / 2.0 - 9.0, inner.w * 0.55, Align::Start);
+            let said = if a.allowed { p("已允许", "Allowed") } else { p("已拒绝", "Blocked") };
+            text_centred(frame, &said, small, if a.allowed { palette.selection } else { palette.text3 }, inner.x, y + row / 2.0 + 9.0, inner.w * 0.4, Align::Start);
+            let mut right = inner.x + inner.w;
+            for (allow, word) in [(true, p("允许", "Allow")), (false, p("拒绝", "Block"))]
+                .into_iter()
+                .filter(|(allow, _)| *allow != a.allowed)
+            {
+                right = self.button(
+                    frame,
+                    palette,
+                    &word,
+                    right,
+                    y + row / 2.0,
+                    Target::ConsentSet { capability: capability.clone(), keys: a.keys.clone(), packaged: a.packaged, allow },
+                    Button::Plain,
+                    &None,
+                ) - 8.0;
+            }
+            y += row;
+        }
+        self.hanging = (y - (area.y + area.h)).max(0.0);
+    }
+
+    /// Gaming's preview: whether Game Mode takes over, and whether the DVR records. A quick
+    /// registry read, so it is taken here rather than off-thread; the buttons flip the same
+    /// switches the left-hand page shows.
+    fn paint_gaming_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let mut y = inner.y;
+        for (label, on, switch) in [
+            (p("游戏模式", "Game Mode"), super::system_settings::game_mode(), Switch::GameMode),
+            (p("游戏 DVR", "Game DVR"), super::system_settings::game_flag("AppCaptureEnabled"), Switch::GameDvr),
+        ] {
+            text_centred(frame, &label, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+            let mut right = inner.x + inner.w;
+            for (want, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
+                let kind = if on == want { Button::Accent } else { Button::Plain };
+                right = self.button(frame, palette, &word, right, y + 12.0, Target::Switch(switch), kind, &None) - 8.0;
+            }
+            y += 46.0;
+        }
+    }
+
+    /// Windows Update as it stands: the edition it runs, how many fixes are in and the newest of
+    /// them, the list of what went in, then how it fetches them and where its own page is. The
+    /// list lives in WMI's store and is slow to answer, so it is read in the background — the pane
+    /// says so while it comes rather than standing blank.
+    fn paint_update_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh: &'static str, en: &'static str| pick(lang, zh, en).to_string();
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let hint = Font::new(Family::Segoe, HINT, 400.0);
+        let margin = 20.0;
+        let col = (area.w - 2.0 * margin).min(560.0);
+        let x = area.x + (area.w - col) / 2.0;
+        // The fixes as last read, newest first; nothing landed yet while the background read runs.
+        let read = crate::sys::patches_snapshot();
+        let reading = read.is_none();
+        let read = read.unwrap_or_default();
+        let latest = read.first().map(|x| x.when.clone()).unwrap_or_default();
+        // Windows itself: its edition, feature update and build, how many fixes went in, the newest
+        // of them, and the day the system came.
+        let product = super::system_settings::os_product();
+        let (release, build) = super::system_settings::os_release();
+        let install = super::system_settings::os_install_date();
+        let said = if reading {
+            p("正在读取…", "Reading…")
+        } else if read.is_empty() {
+            p("没读到", "None read")
+        } else {
+            format!("{}", read.len())
+        };
+        let mut facts = Vec::new();
+        if !product.is_empty() {
+            facts.push((p("操作系统", "Operating system"), product));
+        }
+        if !release.is_empty() {
+            facts.push((p("功能版本", "Feature update"), release));
+        }
+        if !build.is_empty() {
+            facts.push((p("OS 内部版本", "OS build"), build));
+        }
+        facts.push((p("已装更新", "Installed"), said));
+        if !latest.is_empty() {
+            facts.push((p("最近更新", "Latest"), latest));
+        }
+        if !install.is_empty() {
+            facts.push((p("安装于", "Installed on"), install));
+        }
+        let mut y = self.grouped_card(frame, palette, x, area.y + margin, col, Some(&p("Windows 更新", "Windows Update")), &facts, None, font, hint);
+        // The fixes themselves, newest first. Only the newest few are shown here — the pane is not
+        // scrolled — and the count above keeps the rest honest.
+        const SHOWN: usize = 8;
+        let lines: Vec<(String, String)> = if reading || read.is_empty() {
+            // One sentence where a value would stand, the name column left empty for it.
+            vec![(String::new(), if reading { p("正在读取…", "Reading…") } else { p("没读到的更新", "None were read") })]
+        } else {
+            let mut told: Vec<(String, String)> = read
+                .iter()
+                .take(SHOWN)
+                .map(|x| {
+                    let what = if x.what.is_empty() || x.what == "Update" { x.id.clone() } else { format!("{} · {}", x.id, x.what) };
+                    (x.when.clone(), what)
+                })
+                .collect();
+            if read.len() > SHOWN {
+                let more = read.len() - SHOWN;
+                let (zh, en) = (format!("…其余 {more} 项见更新历史"), format!("…{more} more in the history"));
+                told.push((String::new(), lang.pick(&zh, &en).to_string()));
+            }
+            told
+        };
+        y = self.grouped_card(frame, palette, x, y, col, Some(&p("已安装更新", "Installed updates")), &lines, None, font, hint);
+        // How it fetches fixes, and when it last looked; the installing itself is Windows' to do,
+        // so the one door leads to its own page.
+        let auto = match super::system_settings::update_auto_option() {
+            Some(1) => p("关闭", "Off"),
+            Some(2) => p("下载与安装前通知", "Notify before download and install"),
+            Some(3) => p("自动下载", "Download automatically"),
+            Some(4) => p("自动下载并安装", "Download and install automatically"),
+            Some(5) => p("由本地管理员决定", "Let the local admin choose"),
+            _ => p("由 Windows 默认管理", "Left to Windows' default"),
+        };
+        let last = super::system_settings::update_last_check();
+        let last_said = if last.is_empty() { p("尚未记录", "Not recorded") } else { last };
+        y = self.grouped_card(
+            frame,
+            palette,
+            x,
+            y,
+            col,
+            Some(&p("自动更新", "Automatic updates")),
+            &[(p("获取方式", "Fetching"), auto), (p("上次检查", "Last checked"), last_said)],
+            Some((p("Windows 更新…", "Windows Update…"), "ms-settings:windowsupdate")),
+            font,
+            hint,
+        );
+        // The one thing the hub cannot do itself is start a check; the door leads to Windows' page.
+        y += 6.0;
+        self.button(frame, palette, &p("检查更新", "Check for updates"), x + col, y, Target::Open("ms-settings:windowsupdate-action".into()), Button::Plain, &None);
+        y += 34.0;
+        frame.text_wrapped(
+            &p("更新的下载与安装由 Windows 负责，Glance 只把它们读给你看，并带你到它的页面。", "Windows itself downloads and installs the fixes; Glance only reads them off the machine and leads you to its page."),
+            hint,
+            palette.text2,
+            x,
+            y + 16.0,
+            col,
+        );
+        self.hanging = frame.gfx.wrapped_height(&p("更新的下载与安装由 Windows 负责，Glance 只把它们读给你看，并带你到它的页面。", "Windows itself downloads and installs the fixes; Glance only reads them off the machine and leads you to its page."), hint, col) + 16.0;
+        // Woken again while the list is still coming in.
+        if reading {
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+        }
+    }
+
+    /// A card of the hub's shape, its rows stood `line` apart: the usual spacing is 32, wider where
+    /// a page wants the facts to breathe (see 关于本机).
+    fn grouped_card(
+        &mut self,
+        frame: &Frame,
+        palette: &Palette,
+        x: f32,
+        y: f32,
+        width: f32,
+        heading: Option<&str>,
+        lines: &[(String, String)],
+        door: Option<(String, &str)>,
+        font: Font,
+        hint: Font,
+    ) -> f32 {
+        self.grouped_card_spaced(frame, palette, x, y, width, heading, lines, door, font, hint, 32.0)
+    }
+
+    /// A card of the hub's shape: a heading, its lines of name and value kept
+    /// together under hairlines, and one door where Windows keeps the thing.
+    /// Returns where the next card begins.
+    fn grouped_card_spaced(
+        &mut self,
+        frame: &Frame,
+        palette: &Palette,
+        x: f32,
+        y: f32,
+        width: f32,
+        heading: Option<&str>,
+        lines: &[(String, String)],
+        door: Option<(String, &str)>,
+        font: Font,
+        hint: Font,
+        line: f32,
+    ) -> f32 {
+        let head = 34.0;
+        let fall = 18.0;
+        let pad = 14.0;
+        let door_room = if door.is_some() { 44.0 } else { 0.0 };
+        // Each line measured first: what the name leaves the value is its room, and a
+        // value longer than that goes on a line of its own under the name rather than
+        // be cut short — a reading told in halves is no reading at all.
+        let rooms: Vec<(f32, bool)> = lines
+            .iter()
+            .map(|(name, value)| {
+                let room = (width - 2.0 * pad - frame.gfx.measure(name, font) - 16.0).max(80.0);
+                (room, frame.gfx.measure(value, font) > room)
+            })
+            .collect();
+        let mut h = if heading.is_some() { head } else { 0.0 };
+        h += rooms.iter().map(|(_, wrapped)| line + if *wrapped { fall } else { 0.0 }).sum::<f32>() + door_room + pad;
+        card(frame, palette, x, y, width, h, palette.card);
+        stroke_inside(frame, Rect { x, y, w: width, h }, 10.0, palette.card_stroke);
+        let mut cy = y + pad;
+        if let Some(said) = heading {
+            text_centred(frame, said, Font::new(Family::Segoe, 13.0, 600.0), palette.text2, x + pad, y + head / 2.0, width - 2.0 * pad, Align::Start);
+            cy = y + head;
+        }
+        for (at, (name, value)) in lines.iter().enumerate() {
+            let (room, wrapped) = rooms[at];
+            if at > 0 {
+                fill(frame, palette.rule, x + pad, cy, width - 2.0 * pad, 1.0, 0.0);
+            }
+            // The value measured and set against the card's right edge, where it can
+            // only ever be cut short at the room it is given; trusted to a trailing
+            // alignment it would reach out over the edge instead.
+            let said = frame.gfx.measure(value, font);
+            if wrapped {
+                text_centred(frame, name, font, palette.text2, x + pad, cy + line / 2.0 - fall / 2.0, width * 0.42, Align::Start);
+                let shown = said.min(width - 2.0 * pad);
+                text_centred(frame, value, font, palette.text, x + width - pad - shown, cy + line / 2.0 + fall / 2.0, shown, Align::Start);
+                cy += line + fall;
+            } else {
+                text_centred(frame, name, font, palette.text2, x + pad, cy + line / 2.0, width * 0.42, Align::Start);
+                let shown = said.min(room);
+                text_centred(frame, value, font, palette.text, x + width - pad - shown, cy + line / 2.0, shown, Align::Start);
+                cy += line;
+            }
+        }
+        if let Some((word, uri)) = door {
+            if !lines.is_empty() {
+                fill(frame, palette.rule, x + pad, cy, width - 2.0 * pad, 1.0, 0.0);
+            }
+            text_centred(frame, &word, hint, palette.selection, x + pad, cy + 22.0, width - 2.0 * pad, Align::Start);
+            self.targets.push((
+                Rect { x, y: cy, w: width, h: door_room },
+                Target::Open(uri.to_string()),
+            ));
+        }
+        // (Where the card ends is kept for the pane's scroll: see `hub_tall`.)
+        self.drawn = y + h + 14.0;
+        y + h + 14.0
+    }
+
+    /// A card of rows each with a switch at its right: a name at the left, a word just
+    /// left of the switch, the switch itself, and the whole row pressed as one. A heading
+    /// and a line said under it where the card has them. Returns where the next card begins.
+    fn switch_card(
+        &mut self,
+        frame: &Frame,
+        palette: &Palette,
+        x: f32,
+        y: f32,
+        width: f32,
+        heading: Option<&str>,
+        said: Option<&str>,
+        rows: &[(String, String, bool, bool, Target)],
+        font: Font,
+        hint: Font,
+    ) -> f32 {
+        let pad = 14.0;
+        let head = 34.0;
+        let row = 40.0;
+        let switch = 40.0;
+        let mut h = if heading.is_some() { head } else { pad };
+        if said.is_some() {
+            h += 24.0;
+        }
+        h += rows.len() as f32 * row + pad;
+        card(frame, palette, x, y, width, h, palette.card);
+        stroke_inside(frame, Rect { x, y, w: width, h }, 10.0, palette.card_stroke);
+        let mut cy = y + pad;
+        if let Some(text) = heading {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 600.0), palette.text2, x + pad, y + head / 2.0, width - 2.0 * pad, Align::Start);
+            cy = y + head;
+        }
+        if let Some(text) = said {
+            text_centred(frame, text, hint, palette.text3, x + pad, cy + 12.0, width - 2.0 * pad, Align::Start);
+            cy += 24.0;
+        }
+        let switch_left = x + width - pad - switch;
+        let now = Instant::now();
+        for (at, (name, aside, on, enabled, target)) in rows.iter().enumerate() {
+            if at > 0 {
+                fill(frame, palette.rule, x + pad, cy, width - 2.0 * pad, 1.0, 0.0);
+            }
+            let middle = cy + row / 2.0;
+            text_centred(frame, name, font, palette.text, x + pad, middle, (switch_left - 32.0 - x - pad).max(40.0), Align::Start);
+            let aw = frame.gfx.measure(aside, hint);
+            text_centred(frame, aside, hint, palette.text2, switch_left - 14.0 - aw, middle, aw, Align::Start);
+            let pressed = self.pressed == Some(target.clone());
+            self.toggle(frame, palette, format!("toggle:{name}"), *on, *enabled, switch_left, middle, now, pressed);
+            self.targets.push((Rect { x, y: cy, w: width, h: row }, target.clone()));
+            cy += row;
+        }
+        // (Where the card ends is kept for the pane's scroll: see `hub_tall`.)
+        self.drawn = y + h + 14.0;
+        y + h + 14.0
+    }
+
+    /// The hub's sentence under its last card: told in lines `col` wide, and kept
+    /// counted in the height the pane may be scrolled through.
+    fn hub_note(&mut self, frame: &Frame, palette: &Palette, text: &str, x: f32, y: f32, col: f32, hint: Font) {
+        frame.text_wrapped(text, hint, palette.text2, x, y, col);
+        self.hanging = frame.gfx.wrapped_height(text, hint, col) + 16.0;
+    }
+
+    /// The hub's plain card: the page's own mark and word, its readings told as
+    /// the machine has them — what is the system's to keep is left to its page.
+    fn paint_os_plain(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let hint = Font::new(Family::Segoe, HINT, 400.0);
+        let margin = 20.0;
+        let col = area.w - 2.0 * margin;
+        let x = area.x + margin;
+        let y = area.y + margin;
+        use super::system_settings as sys;
+        match self.page {
+            // (Windows Update is told by `paint_update_preview`, not here.)
+            Page::Startup => {
+                // Glance's own place at the sign-in, then every app the machine and this
+                // user keep there — each with the switch the shell itself holds. The list
+                // spans two hives and a file's version resource, so it is read in the
+                // background; the card says so while it comes rather than standing short.
+                let read = crate::sys::startup_snapshot();
+                let reading = read.is_none();
+                let apps = read.unwrap_or_default();
+                let named = |app: &crate::sys::Startup| app.display.eq_ignore_ascii_case("glance") || app.name.eq_ignore_ascii_case("glance");
+                // Glance's own entry is the switch at the top, never a second one below.
+                let kept: Vec<&crate::sys::Startup> = apps.iter().filter(|app| !named(app)).collect();
+                let rows: Vec<(String, String, bool, bool, Target)> = kept
+                    .iter()
+                    .take(16)
+                    .map(|app| {
+                        let hive = if app.machine { p("本机", "Machine") } else { p("本用户", "User") };
+                        (app.display.clone(), hive, app.enabled, true, Target::Startup(app.machine, app.name.clone(), !app.enabled))
+                    })
+                    .collect();
+                let said = if reading {
+                    p("正在读取启动项…", "Reading the start-up apps…")
+                } else {
+                    let on = kept.iter().filter(|app| app.enabled).count() + usize::from(self.autostart);
+                    format!("{} {} · {}", p("允许自启", "Allowed"), on, kept.len() + 1)
+                };
+                let mut to = vec![(p("Glance", "Glance"), p("本应用", "This app"), self.autostart, self.may_autostart, Target::Switch(Switch::Startup))];
+                to.extend(rows);
+                let after = self.switch_card(frame, palette, x, y, col, Some(&p("登录时启动", "At sign-in")), Some(&said), &to, font, hint);
+                self.grouped_card(frame, palette, x, after, col, None, &[], Some((p("Windows 登录项设置…", "Windows' login items…"), "ms-settings:startupapps")), font, hint);
+                // Woken again while the list is still coming in.
+                if reading {
+                    self.next_frame = Instant::now() + Duration::from_millis(1500);
+                }
+            }
+            Page::Access => {
+                // What the machine is worn for reading: the three effects it keeps as
+                // switches of its own, and the two sizes it keeps as numbers — the
+                // sliders that set those live in the page's own list, so here they are
+                // only told as they stand, with the way on to the rest.
+                let said = vec![
+                    (
+                        p("高对比度", "High contrast"),
+                        if sys::high_contrast() { p("开", "On") } else { p("关", "Off") },
+                        sys::high_contrast(),
+                        true,
+                        Target::Switch(Switch::HighContrast),
+                    ),
+                    (
+                        p("透明效果", "Transparent effects"),
+                        if sys::system_transparent() { p("开", "On") } else { p("关", "Off") },
+                        sys::system_transparent(),
+                        true,
+                        Target::Switch(Switch::Glass),
+                    ),
+                    (
+                        p("动画效果", "Animation effects"),
+                        if sys::system_animation() { p("开", "On") } else { p("关", "Off") },
+                        sys::system_animation(),
+                        true,
+                        Target::Switch(Switch::AnimOn),
+                    ),
+                ];
+                let after = self.switch_card(frame, palette, x, y, col, Some(&p("显示", "Display")), None, &said, font, hint);
+                // The pointer's scheme is told by the name it gives itself; where it has
+                // none, it is worn as Windows came with it.
+                let scheme = sys::cursor_scheme();
+                let scheme = if scheme.is_empty() || scheme == "(default)" { p("默认", "default") } else { scheme };
+                let pointer = format!("{} · {}", sys::cursor_size(), scheme);
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    after,
+                    col,
+                    Some(&p("大小", "Sizes")),
+                    &[
+                        (p("文字", "Text"), format!("{}%", sys::text_scale())),
+                        (p("光标", "Pointer"), pointer),
+                    ],
+                    Some((p("辅助功能设置…", "Accessibility settings…"), "ms-settings:easeofaccess")),
+                    font,
+                    hint,
+                );
+                self.hub_note(frame, palette, &p("文字缩放要注销并重新登录才完全生效；上面三个开关即时采用。", "A change to the text size takes full hold after signing out and back in; the three switches above are taken at once."), x, after + 16.0, col, hint);
+            }
+            Page::Language => {
+                // The tongue the machine is worn in, the region whose formats it
+                // carries, and the zone it keeps — all read as Windows has them now,
+                // since a display language is only worn again after signing out.
+                let tongues = sys::preferred_languages();
+                let said = if tongues.is_empty() { sys::locale_name() } else { tongues.join(", ") };
+                let geo = sys::country_name(&sys::geo_name(), lang);
+                let zone = sys::current_zone();
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    y,
+                    col,
+                    Some(&p("语言与地区", "Language & Region")),
+                    &[
+                        (p("显示语言", "Display"), said),
+                        (p("地区格式", "Regional format"), sys::locale_name()),
+                        (p("国家或地区", "Country or region"), if geo.is_empty() { p("未知", "Unknown") } else { geo }),
+                        (p("短日期", "Short date"), sys::short_date()),
+                        (p("时间", "Time"), sys::time_format()),
+                        (p("时区", "Time zone"), if zone.is_empty() { p("未知", "Unknown") } else { zone }),
+                    ],
+                    Some((p("语言与地区设置…", "Language & Region settings…"), "ms-settings:regionlanguage")),
+                    font,
+                    hint,
+                );
+                self.hub_note(frame, palette, &p("换显示语言要注销并重新登录才全部生效；格式的其余半由系统保管。", "A display language is only worn again after signing out and back in; the rest of the formats are the system's to keep."), x, after + 16.0, col, hint);
+            }
+            Page::Sharing => {
+                // The machine as the network knows it: its name and the workgroup or domain
+                // it stands in, the cards it carries that on, what the carrying one holds and
+                // the services that answer on it, and the folders it holds out. What is shared
+                // out is the system's to arrange, so the way on is its page; the reading is
+                // quick, save for the services, which are asked in the background.
+                let read = crate::network::snapshot();
+                let reading = read.is_none();
+                let nics = read.map(|shot| shot.adapters).unwrap_or_default();
+                let named = sys::computer_name();
+                let group = sys::workgroup();
+                let mut card = |y: f32, title: &str, lines: &[(String, String)], door: Option<(String, &str)>| {
+                    self.grouped_card(frame, palette, x, y, col, Some(title), lines, door, font, hint)
+                };
+                // Each card names what it holds; an empty one says so rather than standing blank.
+                let asked = |said: Vec<(String, String)>, none: &str| {
+                    if said.is_empty() {
+                        vec![(none.to_string(), String::new())]
+                    } else {
+                        said
+                    }
+                };
+                let mut lines = vec![
+                    (p("计算机名", "Name"), if named.is_empty() { p("未知", "Unknown") } else { named }),
+                    (p("工作组或域", "Workgroup or domain"), if group.is_empty() { p("未加入", "Not joined") } else { group }),
+                    (
+                        p("网络适配器", "Adapters"),
+                        if reading {
+                            p("正在读取…", "Reading…")
+                        } else {
+                            let count = nics.len();
+                            lang.pick(&format!("{count} 块"), &format!("{count} adapters")).to_string()
+                        },
+                    ),
+                ];
+                for nic in nics.iter() {
+                    let said = if nic.current { p("在用", "Carrying") } else if nic.up { p("已连接", "Connected") } else { p("未连接", "Down") };
+                    let where_ = if nic.ipv4.is_empty() { String::new() } else { format!(" · {}", nic.ipv4) };
+                    lines.push((nic.name.clone(), format!("{said}{where_}")));
+                }
+                let after = card(
+                    y,
+                    &p("本机在网络里", "This PC on the network"),
+                    &lines,
+                    Some((p("网络和共享中心…", "Network and Sharing Centre…"), "ms-settings:network-sharing")),
+                );
+                // The one the internet leaves by, told whole: the address it holds, the way
+                // out it was given, the names it asks, its hardware address and its rate.
+                let carried = nics.iter().find(|nic| nic.current).or_else(|| nics.iter().find(|nic| nic.up));
+                let mut lines = match carried {
+                    Some(nic) => vec![
+                        (p("走的这条", "The one carried"), format!("{} · {}", nic.name, if crate::network::is_wire(nic.kind) { p("无线", "wireless") } else { p("有线", "wired") })),
+                        (p("IPv4 地址", "IPv4 address"), if nic.ipv4.is_empty() { p("没有", "None") } else { nic.ipv4.clone() }),
+                        (p("网关", "Gateway"), if nic.gateway.is_empty() { p("没有", "None") } else { nic.gateway.clone() }),
+                        (p("DNS 服务器", "DNS servers"), if nic.dns.is_empty() { p("没有记下的", "None listed") } else { nic.dns.clone() }),
+                        (p("物理地址", "Physical address"), if nic.mac.is_empty() { p("读不到", "Not read") } else { nic.mac.clone() }),
+                        (p("链路速率", "Link speed"), net_rate(nic.link_bps)),
+                    ],
+                    None => vec![(p("网络适配器", "Adapters"), if reading { p("正在读取…", "Reading…") } else { p("没读到连着的网卡", "None up") })],
+                };
+                // The network the wireless one is joined to, where it says.
+                if let Some(ssid) = crate::wifi::snapshot().and_then(|shot| shot.details).map(|one| one.ssid).filter(|said| !said.is_empty()) {
+                    lines.push((p("连着的网络", "Joined to"), ssid));
+                }
+                let after = card(after, &p("走的那条", "The one it goes by"), &asked(lines, &p("走的那条", "The way out")), None);
+                // What answers on the machine for the sharing to work at all: the file and
+                // printer services, and the discovery that lets it be seen.
+                let services = crate::sys::service_snapshot(&["LanmanServer", "LanmanWorkstation", "FDResPub"]);
+                let told = services.clone().unwrap_or_default();
+                let mut lines: Vec<(String, String)> = ["LanmanServer", "LanmanWorkstation", "FDResPub"]
+                    .iter()
+                    .filter_map(|want| {
+                        told.iter().find(|one| one.name == *want).map(|one| {
+                            let state = if one.running { p("在跑", "Running") } else { p("没在跑", "Not running") };
+                            let start = match one.auto {
+                                true => p("自动起", "Starts of its own"),
+                                false => p("手动起", "Started when asked"),
+                            };
+                            (one.display.clone(), format!("{state} · {start}"))
+                        })
+                    })
+                    .collect();
+                if services.is_none() {
+                    lines.push((p("共享要靠的服务", "The services behind it"), p("正在读取…", "Reading…")));
+                }
+                let after = card(after, &p("它靠的服务", "What it leans on"), &asked(lines, &p("它靠的服务", "What it leans on")), None);
+                // The folders held out, read off the file service's own configuration; the
+                // administrative ones it keeps to itself are told apart from the chosen.
+                let shares = sys::share_list();
+                let mut lines: Vec<(String, String)> = shares
+                    .iter()
+                    .filter(|share| !share.special)
+                    .take(8)
+                    .map(|share| (share.name.clone(), if share.path.is_empty() { p("读不到位置", "No path read") } else { share.path.clone() }))
+                    .collect();
+                let special = shares.iter().filter(|share| share.special).count();
+                if special > 0 {
+                    lines.push((p("系统自留的共享", "Its own shares"), lang.pick(&format!("{special} 个"), &format!("{special} shares")).to_string()));
+                }
+                if lines.is_empty() {
+                    lines.push((p("共享出去的文件夹", "Folders shared out"), p("一个也没有", "Not one")));
+                }
+                let after = card(
+                    after,
+                    &p("共享出去", "Held out to the network"),
+                    &lines,
+                    Some((p("共享设置…", "Sharing settings…"), "ms-settings:network-sharing")),
+                );
+                self.hub_note(
+                    frame,
+                    palette,
+                    &p("这里只把共享的实情读给你看；要开、要改，都在 Windows 的那一页。", "Only the truth of the sharing is read here; the opening and the changing stay on Windows' own page."),
+                    x,
+                    after + 16.0,
+                    col,
+                    hint,
+                );
+                // Woken again while the adapters and the services are still coming in.
+                if reading || services.is_none() {
+                    self.next_frame = Instant::now() + Duration::from_millis(1500);
+                }
+            }
+            Page::Nearby => {
+                // The switch Windows keeps and whom it lets the machine reach, the two
+                // radios the sending stands on, and the way on to where Windows arranges
+                // it. The sending itself stays the system's doing.
+                let level = sys::nearby_share_level();
+                let on = level != 0;
+                let said = vec![(
+                    p("就近共享", "Nearby sharing"),
+                    match level {
+                        1 => p("所有人", "Anyone near"),
+                        2 => p("我的设备", "My own devices"),
+                        _ => p("关", "Off"),
+                    },
+                    on,
+                    true,
+                    Target::Nearby(!on),
+                )];
+                let after = self.switch_card(
+                    frame,
+                    palette,
+                    x,
+                    y,
+                    col,
+                    Some(&p("就近共享", "Nearby sharing")),
+                    Some(&p("用蓝牙和无线局域网把文件发给近处的设备", "Sends files to a machine near by over Bluetooth and Wi-Fi")),
+                    &said,
+                    font,
+                    hint,
+                );
+                let lines = vec![
+                    (
+                        p("无线局域网", "Wi-Fi"),
+                        match crate::wifi::state() {
+                            Some(true) => p("开着", "On"),
+                            Some(false) => p("关着", "Off"),
+                            None => p("读不到", "Not read"),
+                        },
+                    ),
+                    (
+                        p("蓝牙", "Bluetooth"),
+                        match crate::bluetooth::snapshot() {
+                            Some(shot) if shot.radios == 0 => p("没有蓝牙网卡", "No radio in this PC"),
+                            Some(shot) => lang.pick(&format!("{} 块网卡 · {} 个已配对", shot.radios, shot.paired.len()), &format!("{} radios, {} paired", shot.radios, shot.paired.len())).to_string(),
+                            None => p("正在读取…", "Reading…"),
+                        },
+                    ),
+                    (
+                        p("可共享给", "Shared with"),
+                        match level {
+                            1 => p("近处的任何人", "Anyone near by"),
+                            2 => p("自己的设备", "This user's own devices"),
+                            _ => p("关着", "Off"),
+                        },
+                    ),
+                ];
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    after,
+                    col,
+                    Some(&p("它要靠的", "What it stands on")),
+                    &lines,
+                    Some((p("就近共享设置…", "Nearby sharing settings…"), "ms-settings:nearby-sharing-settings")),
+                    font,
+                    hint,
+                );
+                self.hub_note(frame, palette, &p("接力与跨设备接续由 Windows 的跨设备体验承担；这里只读与开关就近共享。", "Picking a task up on another PC is the cross-device experience's own; only nearby sharing is read and set here."), x, after + 16.0, col, hint);
+            }
+            Page::Backup => {
+                // What Windows keeps of the files and whether the points a bad change is
+                // turned back to are kept, then the room each drive has left for those
+                // copies — the history's own arrangement is the system's to do.
+                let drives = sys::drive_space();
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    y,
+                    col,
+                    Some(&p("备份", "Backup")),
+                    &[
+                        (p("文件历史记录", "File History"), if sys::file_history_configured() { p("已设置", "Set up") } else { p("未设置", "Not set up") }),
+                        (p("系统还原点", "Restore points"), match sys::restore_disabled() {
+                            Some(true) => p("已关闭", "Turned off"),
+                            Some(false) => p("开着", "Kept"),
+                            // (The key is only there once the protection has been turned on by hand.)
+                            None => p("没开启", "Not turned on"),
+                        }),
+                    ],
+                    Some((p("备份设置…", "Backup settings…"), "ms-settings:backup")),
+                    font,
+                    hint,
+                );
+                // Where the copies could go: each drive read, with the room it has left.
+                let lines: Vec<(String, String)> = drives
+                    .iter()
+                    .take(5)
+                    .map(|(name, used, total)| (name.clone(), format!("{} / {}", super::text::bytes((*total - *used) as f64), super::text::bytes(*total as f64))))
+                    .collect();
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    after,
+                    col,
+                    Some(&p("各盘的余量", "Room on the drives")),
+                    &lines,
+                    None,
+                    font,
+                    hint,
+                );
+                self.hub_note(frame, palette, &p("文件历史记录把文档、图片等处的副本存到另一块盘或网络位置；这里只读它的状态。", "File History keeps copies of the document shelves on another drive or a network place; only its state is read here."), x, after + 16.0, col, hint);
+            }
+            Page::Recovery => {
+                // What the firmware keeps and what the machine writes when it stops, read
+                // and told; where a restart into the recovery environment or the firmware
+                // setup is asked, the machine does it of its own accord once agreed to.
+                let disk = sys::startup_disk();
+                let after = self.grouped_card(
+                    frame,
+                    palette,
+                    x,
+                    y,
+                    col,
+                    Some(&p("启动磁盘与恢复", "Startup disk and recovery")),
+                    &[
+                        (p("启动磁盘", "Startup disk"), if disk.is_empty() { p("未知", "Unknown") } else { disk }),
+                        (p("固件", "Firmware"), match sys::firmware_uefi() {
+                            Some(true) => p("UEFI", "UEFI"),
+                            Some(false) => p("传统 BIOS", "Legacy BIOS"),
+                            None => p("未知", "Unknown"),
+                        }),
+                        (p("安全启动", "Secure boot"), match sys::secure_boot() {
+                            Some(true) => p("开着", "Worn"),
+                            Some(false) => p("未开", "Not worn"),
+                            // (The firmware's own keep is only read with the administrator's leave.)
+                            None => p("读不到", "Not read"),
+                        }),
+                        (p("故障转储", "Crash dump"), match sys::crash_dump() {
+                            Some(0) => p("不写", "Written nothing"),
+                            Some(1) => p("完整内存转储", "A whole memory dump"),
+                            Some(2) => p("内核内存转储", "The kernel's own"),
+                            Some(3) => p("小内存转储", "A small dump"),
+                            Some(4) => p("自动", "Automatic"),
+                            _ => p("未知", "Unknown"),
+                        }),
+                    ],
+                    Some((p("恢复设置…", "Recovery settings…"), "ms-settings:recovery")),
+                    font,
+                    hint,
+                );
+                let mut by = after;
+                for (label, recovery) in [
+                    (p("重新启动到固件…", "Restart into the firmware…"), false),
+                    (p("重新启动到恢复环境…", "Restart into the recovery environment…"), true),
+                ] {
+                    text_centred(frame, &label, hint, palette.selection, x + 14.0, by + 18.0, col - 28.0, Align::Start);
+                    self.targets.push((Rect { x, y: by, w: col, h: 36.0 }, Target::RebootTo(recovery)));
+                    by += 36.0;
+                }
+            }
+            // A page kept elsewhere in this window: its mark and its word, and the
+            // readings its own preview tells.
+            page => {
+                frame.icon(page.icon(), Point { x: x + col / 2.0, y: y + 44.0 }, 44.0, palette.text2);
+                text_middle(frame, page.name(lang), Font::new(Family::Segoe, 16.0, 600.0), palette.text, x + col / 2.0, y + 92.0);
+            }
+        }
+    }
+
+    /// The hub with none picked: the machine's mark, and a word to pick one.
+    fn paint_hub_plain(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let cx = area.x + area.w / 2.0;
+        let cy = area.y + area.h / 2.0;
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        frame.icon(Icon::Settings, Point { x: cx, y: cy - 26.0 }, 44.0, palette.text3);
+        text_middle(frame, pick(lang, "通用", "General"), Font::new(Family::Segoe, 16.0, 600.0), palette.text, cx, cy + 16.0);
+        text_middle(
+            frame,
+            pick(lang, "从左边选一项，它的详情显示在这里", "Pick one at the left; its details show here"),
+            Font::new(Family::Segoe, HINT, 400.0),
+            palette.text2,
+            cx,
+            cy + 40.0,
+        );
+    }
+
+    /// 关于本机 as the hub shows it: the machine named over its own facts.
+    fn paint_about_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let zh = lang == Lang::Zh;
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let hint = Font::new(Family::Segoe, HINT, 400.0);
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        // The facts are read whole rather than cut short, so the column is let run wide; and the rows
+        // are stood further apart than the hub's usual, to give the machine's telling room to breathe.
+        let col = (area.w - 2.0 * margin).min(560.0);
+        let line = 44.0;
+        let x = area.x + (area.w - col) / 2.0;
+        frame.icon(Icon::AppWindow, Point { x: area.x + area.w / 2.0, y: area.y + margin + 34.0 }, 52.0, palette.text2);
+        let named = super::system_settings::computer_name();
+        text_middle(frame, &named, Font::new(Family::Segoe, 17.0, 600.0), palette.text, x + col / 2.0, area.y + margin + 84.0);
+        text_middle(frame, pick(lang, "本机", "This PC"), Font::new(Family::Segoe, HINT, 400.0), palette.text2, x + col / 2.0, area.y + margin + 104.0);
+        let facts = super::system_settings::about_facts(zh);
+        // macOS keeps the machine's hardware and the system it runs apart, under their own heads; so
+        // does this page. The name stands at the top already, so its fact is left out of both cards.
+        const HARDWARE: [&str; 14] = [
+            "制造商", "机型", "处理器", "机载内存", "显卡", "启动磁盘", "序列号",
+            "Manufacturer", "Model", "Processor", "Installed RAM", "Graphics", "Startup disk", "Serial number",
+        ];
+        const DEVICE: [&str; 2] = ["设备名称", "Device name"];
+        let (hardware, system): (Vec<_>, Vec<_>) = facts
+            .into_iter()
+            .filter(|(label, _)| !DEVICE.contains(&label.as_str()))
+            .partition(|(label, _)| HARDWARE.contains(&label.as_str()));
+        let top = (area.y + margin + 126.0).min(area.y + area.h - 120.0);
+        let after = self.grouped_card_spaced(frame, palette, x, top, col, Some(pick(lang, "硬件", "Hardware")), &hardware, None, font, hint, line);
+        self.grouped_card_spaced(frame, palette, x, after, col, Some(pick(lang, "系统", "System")), &system, Some((pick(lang, "详细信息…", "More info…").to_string(), "ms-settings:about")), font, hint, line);
+    }
+
+    /// 日期与时间 as the hub shows it: the clock as it reads now and the zone it
+    /// keeps, the two switches that can be turned here, the formats behind them.
+    fn paint_datetime_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        use super::system_settings as sys;
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let hint = Font::new(Family::Segoe, HINT, 400.0);
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let col = (area.w - 2.0 * margin).min(420.0);
+        let x = area.x + (area.w - col) / 2.0;
+
+        // The hour the machine stands at, its zone named, the shift it keeps from
+        // UTC told whole, and whether summer time has hold of it.
+        let named = sys::current_zone();
+        let after = self.grouped_card(
+            frame,
+            palette,
+            x,
+            area.y + margin,
+            col,
+            Some(&p("日期与时间", "Date & Time")),
+            &[
+                (p("现在", "Now"), sys::wall_clock()),
+                (p("时区", "Time zone"), if named.is_empty() { p("未知", "Unknown") } else { named }),
+                (p("与 UTC 的差", "Shift from UTC"), sys::zone_shift().unwrap_or_else(|| p("未知", "Unknown"))),
+                (p("夏令时", "Summer time"), if sys::summer_time() { p("在跑", "Running") } else { p("不在跑", "Not running") }),
+            ],
+            None,
+            font,
+            hint,
+        );
+
+        // The two things about the clock that Glance can change in place; the hour
+        // itself, the zone, and the correcting of it are Windows' to keep.
+        let rows = vec![
+            (
+                p("24 小时制", "The 24-hour clock"),
+                if sys::clock_24() { p("24 小时", "24-hour") } else { p("12 小时", "12-hour") },
+                sys::clock_24(),
+                true,
+                Target::Switch(Switch::Clock24),
+            ),
+            (
+                p("显示秒数", "Seconds on the clock"),
+                if sys::clock_seconds() { p("显示", "Shown") } else { p("不显示", "Not shown") },
+                sys::clock_seconds(),
+                true,
+                Target::Switch(Switch::Seconds),
+            ),
+        ];
+        let after = self.switch_card(frame, palette, x, after, col, Some(&p("时钟的样子", "The clock's face")), None, &rows, font, hint);
+
+        let blank = |said: String| if said.is_empty() { p("未记录", "Not recorded") } else { said };
+        let after = self.grouped_card(
+            frame,
+            palette,
+            x,
+            after,
+            col,
+            Some(&p("格式", "The formats")),
+            &[
+                (p("短日期", "Short date"), blank(sys::short_date())),
+                (p("长日期", "Long date"), blank(sys::long_date())),
+                (p("时间", "Time"), blank(sys::time_format())),
+            ],
+            Some((p("日期与时间设置…", "Date & Time settings…"), "ms-settings:dateandtime")),
+            font,
+            hint,
+        );
+        // The formats' other half — the tongue they are worn in — is chosen on the
+        // language page, so only the way on is given here: a link, not a card of its own.
+        text_centred(frame, &p("语言与地区设置…", "Language & Region settings…"), hint, palette.selection, x, after + 18.0, col, Align::Start);
+        self.targets.push((Rect { x, y: after + 4.0, w: col, h: 32.0 }, Target::Open("ms-settings:regionlanguage".to_string())));
+        // The clock is kept running to the second, so the card is drawn again to
+        // show the one it has reached.
+        self.next_frame = Instant::now() + Duration::from_millis(1000);
+    }
+
+    /// Network's preview: the adapter picked at the left (or the one the internet leaves by), what
+    /// it holds — addresses, gateway, DNS, its rate — and the machine's upload and download running
+    /// along the bottom, from the live history.
+    fn paint_network_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let say = |text: &str| {
+            text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
+        };
+        let Some(shot) = crate::network::snapshot() else {
+            say(&p("正在读取网卡…", "Reading the adapters…"));
+            self.next_frame = Instant::now() + Duration::from_millis(1000);
+            return;
+        };
+        // The adapter shown: the one picked by name, else the one the internet leaves by, else the first up.
+        let chosen = match &self.net_selected {
+            Some(name) => shot.adapters.iter().find(|a| &a.name == name).cloned(),
+            None => shot.adapters.iter().find(|a| a.current).or_else(|| shot.adapters.iter().find(|a| a.up)).cloned(),
+        };
+        let Some(a) = chosen else {
+            say(&p("点左侧的网卡以查看其信息", "Pick an adapter at the left to see its details"));
+            return;
+        };
+        let head = Font::new(Family::Segoe, 16.0, 600.0);
+        let name = Font::new(Family::Segoe, 13.5, 400.0);
+        let value = Font::new(Family::Segoe, 13.5, 600.0);
+        let mut y = inner.y;
+        text_centred(frame, &a.name, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+        y += 34.0;
+        let kind = if crate::network::is_wire(a.kind) {
+            p("无线网卡", "Wireless adapter")
+        } else if crate::network::is_wired(a.kind) {
+            p("有线网卡", "Wired adapter")
+        } else {
+            p("网络适配器", "Network adapter")
+        };
+        text_centred(frame, &kind, Font::new(Family::Segoe, 12.0, 400.0), palette.text3, inner.x, y + 6.0, inner.w, Align::Start);
+        y += 24.0;
+        let dash = |v: String| if v.is_empty() { p("无", "—") } else { v };
+        let line = |label: String, shown: String, y: &mut f32| {
+            text_centred(frame, &label, name, palette.text2, inner.x, *y + 12.0, inner.w * 0.42, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.42, *y + 12.0, inner.w * 0.58, Align::End);
+            *y += 28.0;
+        };
+        let state = if a.current {
+            p("使用中", "In use")
+        } else if a.up {
+            p("已连接", "Connected")
+        } else {
+            p("未连接", "Not connected")
+        };
+        line(p("状态", "Status"), state, &mut y);
+        line(p("描述", "Description"), dash(a.description.clone()), &mut y);
+        line(p("IPv4 地址", "IPv4 address"), dash(a.ipv4.clone()), &mut y);
+        line(p("网关", "Gateway"), dash(a.gateway.clone()), &mut y);
+        line(p("DNS 服务器", "DNS servers"), dash(a.dns.clone()), &mut y);
+        line(p("物理地址", "Physical address"), dash(a.mac.clone()), &mut y);
+        let link = net_rate(a.link_bps);
+        line(p("链路速率", "Link speed"), link, &mut y);
+        // --- The current network's running speed, from the live history ---
+        y += 10.0;
+        let (down, up) = net_series(120);
+        let rate = |v: f64| {
+            if v >= 1_000_000.0 {
+                format!("{:.1} MB/s", v / 1_000_000.0)
+            } else if v >= 1000.0 {
+                format!("{:.0} KB/s", v / 1000.0)
+            } else {
+                format!("{:.0} B/s", v)
+            }
+        };
+        text_centred(frame, &p("当前网络的上传与下载", "Upload and download now"), Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 8.0, inner.w, Align::Start);
+        let latest = |v: &[f64]| v.last().copied().unwrap_or(0.0);
+        let figures = format!("↓ {}   ↑ {}", rate(latest(&down)), rate(latest(&up)));
+        text_centred(frame, &figures, value, palette.text2, inner.x + inner.w * 0.45, y + 8.0, inner.w * 0.55, Align::End);
+        y += 26.0;
+        let box_h = (inner.y + inner.h - y - 26.0).clamp(0.0, 150.0);
+        if box_h >= 30.0 && down.len() > 1 {
+            let (cx, cy, cw) = (inner.x, y, inner.w);
+            let most = down.iter().chain(up.iter()).fold(1024.0f64, |m, v| m.max(*v));
+            let at = |v: &[f64]| -> Vec<Point> {
+                let step = cw / v.len().saturating_sub(1).max(1) as f32;
+                v.iter().enumerate().map(|(i, x)| Point { x: cx + i as f32 * step, y: cy + box_h - box_h * (*x / most).min(1.0) as f32 }).collect()
+            };
+            fill(frame, palette.rule, cx, cy + box_h, cw, 1.0, 0.5);
+            let down_points = at(&down);
+            let mut wash = down_points.clone();
+            wash.push(Point { x: cx + cw, y: cy + box_h });
+            wash.push(Point { x: cx, y: cy + box_h });
+            frame.fill_shape(&wash, crate::ui::canvas::Fill::Solid(palette.selection.alpha(0.16)));
+            frame.stroke(&down_points, palette.selection, 1.5);
+            frame.stroke_dashed(&at(&up), palette.text2.alpha(0.8), 1.2);
+            // Which line is which, under it.
+            text_centred(frame, &p("— 下载   – – 上传", "— download   – – upload"), Font::new(Family::Segoe, 11.5, 400.0), palette.text3, cx, cy + box_h + 12.0, cw, Align::Start);
+        }
+        // The curve moves: drawn again each second.
+        self.next_frame = Instant::now() + Duration::from_millis(1000);
+    }
+
+    /// Power's preview: the battery large and what it says now — its estimate left, its health —
+    /// the charge of late running along the bottom from the live history, and the plan and the
+    /// delays the left sets.
+    fn paint_power_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let zh = lang == Lang::Zh;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 22.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let mut y = inner.y + 6.0;
+        let live = battery_latest();
+        match super::system_settings::battery() {
+            Some((pct, charging)) => {
+                // A battery drawn by hand: an outline, its knob, and the fill.
+                let (bw, bh) = (92.0_f32, 44.0_f32);
+                let (bx, by) = (inner.x, y);
+                fill(frame, palette.control, bx, by, bw, bh, 8.0);
+                Canvas::stroke_rounded(frame, crate::ui::canvas::Fill::Solid(palette.text3), bx, by, bw, bh, 8.0, 1.5);
+                fill(frame, palette.text2, bx + bw + 2.0, by + bh / 2.0 - 6.0, 4.0, 12.0, 2.0);
+                let pad = 4.0;
+                let in_w = (bw - 2.0 * pad) * pct as f32 / 100.0;
+                fill(frame, palette.selection, bx + pad, by + pad, in_w, bh - 2.0 * pad, 4.0);
+                let big = format!("{pct}%");
+                text_centred(frame, &big, Font::new(Family::SegoeDisplay, 30.0, 600.0), palette.text, bx + bw + 18.0, by + bh / 2.0 - 4.0, 160.0, Align::Start);
+                let word = if charging { p("正在充电", "charging") } else { p("使用电池", "on battery") };
+                text_centred(frame, &word, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, bx + bw + 18.0, by + bh / 2.0 + 22.0, 200.0, Align::Start);
+                y = by + bh + 18.0;
+                // What the live sample adds: the estimate left, the watts, and the health.
+                let mut words: Vec<String> = Vec::new();
+                if let Some(b) = &live {
+                    if let Some(secs) = b.seconds_left {
+                        let (h, m) = (secs / 3600, (secs % 3600) / 60);
+                        let said = match (zh, h > 0) {
+                            (true, true) => format!("{h} 小时 {m} 分"),
+                            (true, false) => format!("{m} 分钟"),
+                            (false, true) => format!("{h} h {m} min"),
+                            (false, false) => format!("{m} min"),
+                        };
+                        words.push(format!("{} {said}", p("剩余", "Left")));
+                    }
+                    if let Some(w) = b.watts.map(|w| w.abs()) {
+                        if w >= 0.05 {
+                            words.push(format!("{:.1} W", w));
+                        }
+                    }
+                }
+                if let Some(health) = live.as_ref().and_then(|b| b.health).map(|h| h as u32).or(super::system_settings::battery_health()) {
+                    words.push(format!("{} {health}%", p("健康度", "Health")));
+                }
+                if !words.is_empty() {
+                    text_centred(frame, &words.join(" · "), Font::new(Family::Segoe, 12.5, 400.0), palette.text2, inner.x, y + 4.0, inner.w, Align::Start);
+                    y += 24.0;
+                }
+            }
+            None => {
+                text_centred(frame, &p("本机没有电池，接交流电运行", "No battery — running on mains power"), Font::new(Family::Segoe, 14.0, 400.0), palette.text2, inner.x, y + 10.0, inner.w, Align::Start);
+                y += 40.0;
+            }
+        }
+        // The plan on now, and the two delays the left sets.
+        let (plans, on) = super::system_settings::plan_choices(zh);
+        if let Some(i) = on {
+            if let Some(name) = plans.get(i) {
+                text_centred(frame, &format!("{} · {}", p("电源方案", "Power plan"), name), Font::new(Family::Segoe, 13.5, 400.0), palette.text, inner.x, y + 8.0, inner.w, Align::Start);
+                y += 26.0;
+            }
+        }
+        let line = format!(
+            "{} {} · {} {}",
+            p("关屏", "Screen off"),
+            super::system_settings::screen_timeout(),
+            p("睡眠", "Sleep"),
+            super::system_settings::sleep_timeout(),
+        );
+        text_centred(frame, &line, Font::new(Family::Segoe, 13.5, 400.0), palette.text2, inner.x, y + 8.0, inner.w, Align::Start);
+        y += 34.0;
+        // --- The charge of late, from the live history: one line, 0 to 100% ---
+        if super::system_settings::battery().is_some() {
+            let series = battery_series(140);
+            if series.len() > 1 {
+                text_centred(frame, &p("近期电量", "Charge of late"), Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 6.0, inner.w, Align::Start);
+                y += 24.0;
+                let box_h = (inner.y + inner.h - y - 6.0).clamp(0.0, 130.0);
+                if box_h >= 40.0 {
+                    let (cx, cy, cw) = (inner.x, y, inner.w);
+                    fill(frame, palette.rule, cx, cy + box_h, cw, 1.0, 0.5);
+                    for share in [0.25, 0.5, 0.75] {
+                        fill(frame, palette.rule.alpha(0.5), cx, cy + box_h - box_h * share, cw, 1.0, 0.5);
+                    }
+                    let step = cw / series.len().saturating_sub(1).max(1) as f32;
+                    let points: Vec<Point> = series
+                        .iter()
+                        .enumerate()
+                        .map(|(i, x)| Point { x: cx + i as f32 * step, y: cy + box_h - box_h * (x / 100.0).clamp(0.0, 1.0) as f32 })
+                        .collect();
+                    let mut wash = points.clone();
+                    wash.push(Point { x: cx + cw, y: cy + box_h });
+                    wash.push(Point { x: cx, y: cy + box_h });
+                    frame.fill_shape(&wash, crate::ui::canvas::Fill::Solid(palette.selection.alpha(0.14)));
+                    frame.stroke(&points, palette.selection, 1.5);
+                }
+            }
+            // The charge creeps: drawn again each second.
+            self.next_frame = Instant::now() + Duration::from_millis(1000);
+        }
+    }
+
+    /// Screen time's preview: seven days of bars, today's busiest programs, and what is
+    /// in front now.
+    fn paint_screen_time_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let zh = lang == Lang::Zh;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let week = super::screen_time::week();
+        // --- Seven bars ---
+        let bars_h = (inner.h * 0.42).min(150.0);
+        let top = inner.y + 10.0;
+        let base = top + bars_h;
+        let gap = 10.0;
+        let bw = ((inner.w - gap * 6.0) / 7.0).max(6.0);
+        let max = week.iter().map(|(_, s)| *s).max().unwrap_or(0).max(60);
+        for (i, (day, secs)) in week.iter().enumerate() {
+            let x = inner.x + i as f32 * (bw + gap);
+            let h = bars_h * (*secs as f32 / max as f32);
+            fill(frame, palette.control, x, base - bars_h, bw, bars_h, 4.0);
+            fill(frame, if i + 1 == week.len() { palette.selection } else { palette.hover }, x, base - h, bw, h.max(2.0), 4.0);
+            // The day of the month under each bar.
+            let label = day.rsplit('-').next().unwrap_or("").to_string();
+            text_centred(frame, &label, Font::new(Family::Segoe, 10.5, 400.0), palette.text3, x - 4.0, base + 12.0, bw + 8.0, Align::Start);
+        }
+        // --- Today's busiest programs ---
+        let mut y = base + 30.0;
+        text_centred(frame, &p("今日最常用", "Busiest today"), Font::new(Family::Segoe, 12.5, 600.0), palette.text3, inner.x, y, inner.w, Align::Start);
+        y += 20.0;
+        let today = week.last().map(|(d, _)| d.clone()).unwrap_or_default();
+        let apps = super::screen_time::usage(&today);
+        let app_max = apps.first().map(|(_, s)| *s).unwrap_or(1).max(1);
+        for (name, secs) in apps.iter().take(5) {
+            if y + 22.0 > inner.y + inner.h {
+                break;
+            }
+            text_centred(frame, name, Font::new(Family::Segoe, 13.0, 400.0), palette.text, inner.x, y + 8.0, 150.0, Align::Start);
+            let track = Rect { x: inner.x + 158.0, y, w: inner.w - 158.0 - 70.0, h: 12.0 };
+            fill(frame, palette.control, track.x, track.y, track.w, track.h, 6.0);
+            fill(frame, palette.selection, track.x, track.y, track.w * (*secs as f32 / app_max as f32), track.h, 6.0);
+            let (h, m) = (*secs / 3600, (*secs % 3600) / 60);
+            let dur = if zh { format!("{h}时{m:02}分") } else { format!("{h}h {m:02}m") };
+            text_centred(frame, &dur, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, inner.x + inner.w - 70.0, y + 6.0, 70.0, Align::End);
+            y += 24.0;
+        }
+        if apps.is_empty() {
+            text_centred(frame, &p("还没有记录", "Nothing kept yet"), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y + 6.0, inner.w, Align::Start);
+        }
+        // What is in front now.
+        let fg = super::screen_time::foreground();
+        if !fg.is_empty() {
+            text_centred(frame, &format!("{} · {}", p("当前", "In front now"), fg), Font::new(Family::Segoe, 12.0, 400.0), palette.text3, inner.x, inner.y + inner.h - 6.0, inner.w, Align::Start);
+        }
+    }
+
+    /// Wallpaper's preview: a grid of the pictures Windows ships and the themes use; pressing
+    /// one puts it on the desktop.
+    fn paint_wallpaper_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 18.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        text_centred(frame, &p("选择壁纸", "Choose a wallpaper"), Font::new(Family::Segoe, 15.0, 600.0), palette.text, inner.x, inner.y, inner.w, Align::Start);
+        let listed = super::system_settings::wallpapers();
+        let current = super::system_settings::current_wallpaper();
+        let grid_top = inner.y + 30.0;
+        let gap = 10.0;
+        let name_h = 20.0;
+        let card_w = 150.0_f32;
+        let card_h = 84.0_f32;
+        let cell_w = card_w + gap;
+        let cell_h = card_h + name_h + gap;
+        let cols = ((inner.w + gap) / cell_w).floor().max(1.0) as usize;
+        let total_w = cols as f32 * cell_w - gap;
+        let grid_x0 = inner.x + (inner.w - total_w) / 2.0;
+        for (i, (name, path)) in listed.iter().enumerate() {
+            let (row, col) = (i / cols, i % cols);
+            let (cx, cy) = (grid_x0 + col as f32 * cell_w, grid_top + row as f32 * cell_h);
+            if cy + cell_h > inner.y + inner.h {
+                break;
+            }
+            let radius = 6.0;
+            fill(frame, palette.control, cx, cy, card_w, card_h, radius);
+            if let Some(pic) = crate::station::thumbs::of(std::path::Path::new(path), (card_w * 2.0) as u32) {
+                frame.picture(&pic, cx, cy, card_w, card_h, radius, 1.0);
+            }
+            let on = !current.is_empty() && current.eq_ignore_ascii_case(path);
+            if on {
+                let sel = Rect { x: cx - 1.5, y: cy - 1.5, w: card_w + 3.0, h: card_h + 3.0 };
+                Canvas::stroke_rounded(frame, crate::ui::canvas::Fill::Solid(palette.selection), sel.x, sel.y, sel.w, sel.h, radius + 1.5, 2.5);
+            } else {
+                stroke_inside(frame, Rect { x: cx, y: cy, w: card_w, h: card_h }, radius, palette.card_stroke);
+            }
+            text_centred(frame, name, Font::new(Family::Segoe, 11.5, if on { 600.0 } else { 400.0 }), if on { palette.text } else { palette.text2 }, cx, cy + card_h + name_h / 2.0 + 2.0, card_w, Align::Start);
+            self.targets.push((Rect { x: cx, y: cy, w: card_w, h: card_h + name_h }, Target::SetWallpaper(path.clone())));
+        }
+        if listed.is_empty() {
+            text_centred(frame, &p("未找到墙纸文件", "No wallpaper files found"), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, grid_top + 10.0, inner.w, Align::Start);
+        }
     }
 
     /// How the stage is shown in `area` with a panel `pw` wide (stage DIPs) slid out from `edge`: how large a stage
@@ -6654,7 +10157,7 @@ fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
 
 /// (Through the frame's own fill, put on whole pixels as everything Glance draws is: drawn straight, the settings'
 /// rails and cards were spread over pixels, softer than the rest, and a slider's knob stood half a pixel off its rail.)
-fn fill(frame: &Frame, color: Color, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+pub(crate) fn fill(frame: &Frame, color: Color, x: f32, y: f32, w: f32, h: f32, radius: f32) {
     Canvas::fill_rounded(frame, color, x, y, w, h, radius.min(w / 2.0).min(h / 2.0));
 }
 
@@ -6698,9 +10201,15 @@ fn card(frame: &Frame, palette: &Palette, x: f32, y: f32, w: f32, h: f32, color:
 
 /// One line of text centred on `cy`.
 #[allow(clippy::too_many_arguments)]
-fn text_centred(frame: &Frame, text: &str, font: Font, color: Color, x: f32, cy: f32, width: f32, align: Align) {
+pub(crate) fn text_centred(frame: &Frame, text: &str, font: Font, color: Color, x: f32, cy: f32, width: f32, align: Align) {
     let (ascent, descent) = frame.gfx.baseline(font);
     frame.text(text, font, color, x, cy - (ascent + descent) / 2.0, width, align);
+}
+
+/// Text drawn whole and horizontally centred on `cx`, its middle on the line `cy`.
+fn text_middle(frame: &Frame, text: &str, font: Font, color: Color, cx: f32, cy: f32) {
+    let width = frame.gfx.measure(text, font);
+    text_centred(frame, text, font, color, cx - width / 2.0, cy, width, Align::Start);
 }
 
 /// Choices `widths` wide, line by line: each line as many whole as fit in `room` (the track's 4 DIPs of rim
