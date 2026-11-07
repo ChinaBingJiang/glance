@@ -57,6 +57,8 @@ pub enum Icon {
     ArrowDown,
     Search,
     Palette,
+    /// A paintbrush (Lucide's brush): the system's own look.
+    Brush,
     Smartphone,
     /// A notice of Glance's site (Lucide's megaphone).
     Megaphone,
@@ -119,6 +121,26 @@ pub enum Icon {
     /// move-diagonal-2).
     MoveDiagonal,
     MoveDiagonal2,
+    // ---- System settings page icons ----
+    Wifi,
+    Bluetooth,
+    Battery,
+    /// Do not disturb / focus mode (Lucide's moon).
+    Moon,
+    /// Screen time (Lucide's timer).
+    Timer,
+    /// Keyboard & mouse (Lucide's keyboard).
+    Keyboard,
+    /// Accessibility (Lucide's eye).
+    Eye,
+    /// Control centre (Lucide's sliders-horizontal).
+    Sliders,
+    /// Desktop & taskbar (Lucide's layout-dashboard).
+    LayoutDashboard,
+    /// User account (Lucide's user).
+    User,
+    /// About this PC (Lucide's info).
+    Info,
 }
 
 impl Icon {
@@ -236,6 +258,10 @@ impl Icon {
                 "M6 12.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0-1 0z",
                 "M8 7.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0-1 0z",
             ],
+            Icon::Brush => &[
+                "M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08",
+                "M7.07 14.94c-1.66 0-3 1.35-3 3.01 0 1.5 1.12 2.83 2.55 2.99 1.63.18 3.34-.7 4.24-2.01 1.01-1.38.87-3.26-.31-4.43a3.33 3.33 0 0 0-3.48-.56z",
+            ],
             Icon::PencilRuler => &[
                 "M13 7 8.7 2.7a2.41 2.41 0 0 0-3.4 0L2.7 5.3a2.41 2.41 0 0 0 0 3.4L7 13",
                 "m8 6 2-2",
@@ -306,6 +332,59 @@ impl Icon {
             Icon::Game => &[
                 "M6 11h4", "M8 9v4", "M15 12h.01", "M18 10h.01",
                 "M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z",
+            ],
+            Icon::Wifi => &[
+                "M12 20h.01",
+                "M2 8.82a15 15 0 0 1 4.17-2.65",
+                "M19.83 6.17A15 15 0 0 1 22 8.82",
+                "M5 12.859a10 10 0 0 1 5.17-2.69",
+                "M18.83 12.86a10 10 0 0 0-5.17-2.69",
+                "M9 16.51a5 5 0 0 1 6 0",
+            ],
+            Icon::Bluetooth => &[
+                "m7 21 10-5-10-5V2l10 5-10 5",
+            ],
+            Icon::Battery => &[
+                "M16 8.5h1.5a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-.5.5H16",
+                "M4 7h11a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z",
+                "M5.5 9.5v5",
+            ],
+            Icon::Moon => &[
+                "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z",
+            ],
+            Icon::Timer => &[
+                "M10 2h4",
+                "M12 14l-2-2",
+                "M12 6v8",
+                "M16 16.1A6 6 0 1 0 8 6.1",
+            ],
+            Icon::Keyboard => &[
+                "M10 8h.01", "M12 12h.01", "M14 8h.01", "M16 12h.01", "M18 8h.01",
+                "M6 8h.01", "M7 12h.01", "M8 8h.01",
+                "M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+                "M17 16h-4.5", "M20 4.5v6", "M16.5 9.5 20 4.5",
+            ],
+            Icon::Eye => &[
+                "M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z",
+                "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+            ],
+            Icon::Sliders => &[
+                "M21 4H14", "M10 4H3",
+                "M21 12H12", "M8 12H3",
+                "M21 20H16", "M12 20H3",
+                "M14 2v4", "M8 10v4", "M16 18v4",
+            ],
+            Icon::LayoutDashboard => &[
+                "M3 3h7v9H3z", "M14 3h7v5h-7z", "M14 12h7v9h-7z", "M3 16h7v5H3z",
+            ],
+            Icon::User => &[
+                "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2",
+                "M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+            ],
+            Icon::Info => &[
+                "M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z",
+                "M12 16v-4",
+                "M12 8h.01",
             ],
         }
     }

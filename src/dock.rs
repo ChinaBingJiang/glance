@@ -263,7 +263,7 @@ pub struct Dock {
 
 impl Dock {
     pub fn new() -> Result<Self> {
-        let gfx = gfx::current()?;
+        let gfx = gfx::for_main_screen()?;
         let window = Window::see_through()?;
         let mut stage = match Window::see_through() {
             Ok(stage) => stage,
@@ -732,7 +732,7 @@ impl Dock {
 
     /// Draws it where it is: the row as the pointer and the swell have it, on glass as the screen behind asks.
     fn draw(&mut self) {
-        let Ok(gfx) = gfx::current() else { return };
+        let Ok(gfx) = gfx::for_window(self.stage.hwnd) else { return };
         if !Rc::ptr_eq(&gfx, &self.gfx) {
             self.gone();
             self.gfx = gfx;
@@ -789,7 +789,7 @@ impl Dock {
             );
         });
         if let Err(error) = &painted {
-            gfx::failed("dock", Some(error));
+            gfx::failed("dock", &self.gfx, Some(error));
             return;
         }
         self.gfx.sweep();

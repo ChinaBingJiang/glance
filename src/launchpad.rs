@@ -313,7 +313,7 @@ pub struct Launchpad {
 
 impl Launchpad {
     pub fn new() -> Result<Self> {
-        let gfx = gfx::current()?;
+        let gfx = gfx::for_main_screen()?;
         let window = Window::see_through()?;
         let surface = match Frosted::new(&gfx, window.hwnd, (glass::BLUR, glass::SATURATION)) {
             Ok(surface) => surface,
@@ -416,6 +416,9 @@ impl Launchpad {
         self.pad = (settings.pad_cols, settings.pad_rows);
         self.dock_room = overhang(settings.measures().0, settings.peak()).1;
         self.look_at();
+        // (The shell's read taken again in the background: a program installed since the last look comes in when it
+        //  lands, the tick folding it in. Never waited for, so the page still comes up at once on what was read before.)
+        found::look(|| {});
         self.names(settings);
         {
             let mut words = self.words.borrow_mut();
@@ -1686,7 +1689,7 @@ impl Launchpad {
 
     /// Draws it: its screen washed over what is behind it, its search, its page of tiles, and the pages' dots.
     fn draw(&mut self) {
-        let Ok(gfx) = gfx::current() else { return };
+        let Ok(gfx) = gfx::for_window(self.window.hwnd) else { return };
         if !Rc::ptr_eq(&gfx, &self.gfx) {
             self.gone();
             self.gfx = gfx;
@@ -1805,7 +1808,7 @@ impl Launchpad {
                 shape::dots(frame, pages, page, wide, dots_at, dark);
             });
         if let Err(error) = &painted {
-            gfx::failed("launchpad", Some(error));
+            gfx::failed("launchpad", &self.gfx, Some(error));
             return;
         }
         self.gfx.sweep();

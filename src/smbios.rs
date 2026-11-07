@@ -218,6 +218,62 @@ pub mod examples {
     }
 }
 
+/// SMBIOS structure type 1: the system itself.
+const SYSTEM: u8 = 1;
+
+/// The machine's maker, model and serial number, from the firmware's own
+/// inventory (SMBIOS type 1); each empty where the firmware does not tell
+/// (a bare board, or a virtual machine).
+pub fn system() -> (String, String, String) {
+    let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
+    let mut raw = vec![0u8; size as usize];
+    if size == 0 || unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut raw)) } != size {
+        return Default::default();
+    }
+    let table = &raw[RAW_HEADER.min(raw.len())..];
+    let mut at = 0;
+    while at + 4 <= table.len() {
+        let kind = table[at];
+        let length = table[at + 1] as usize;
+        if kind == END_OF_TABLE || length < 4 || at + length > table.len() {
+            break;
+        }
+        if kind == SYSTEM {
+            let fields = &table[at..at + length];
+            let area = &table[at + length..];
+            // Manufacturer, Product, Serial: the string numbers held at these offsets.
+            let take = |slot: usize| fields.get(slot).filter(|&&n| n != 0).map(|&n| string(area, n as usize)).unwrap_or_default();
+            return (take(0x04), take(0x05), take(0x07));
+        }
+        // The formatted part is followed by its strings, ended by two zeros.
+        let mut next = at + length;
+        while next + 1 < table.len() && !(table[next] == 0 && table[next + 1] == 0) {
+            next += 1;
+        }
+        at = next + 2;
+    }
+    Default::default()
+}
+
+/// The `n`th (1-based) null-terminated string of a structure's string area.
+fn string(area: &[u8], n: usize) -> String {
+    let mut at = 0;
+    for _ in 1..n {
+        while at < area.len() && area[at] != 0 {
+            at += 1;
+        }
+        if at >= area.len() {
+            return String::new();
+        }
+        at += 1;
+    }
+    let start = at;
+    while at < area.len() && area[at] != 0 {
+        at += 1;
+    }
+    String::from_utf8_lossy(&area[start..at]).trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -310,6 +310,8 @@ const CHECK: usize = 3;
 const QUIT: usize = 4;
 const RECALL: usize = 5;
 const DOCK: usize = 6;
+/// This PC, named as it is, in the hub's card about it.
+const ABOUT: usize = 7;
 
 /// The icon's menu, opening up from `(x, y)` on the screen as the taskbar's do, up (see `menu::Menu`), with what each
 /// of its choices is (see `chosen`). On the panel's thread.
@@ -328,6 +330,7 @@ pub fn open_menu(x: i32, y: i32, over_the_panel: bool) -> Option<(crate::ui::men
     }
     choices.push((DOCK, if zh { "显示 Dock" } else { "Show the dock" }, Icon::ArrowDownToLine, false));
     choices.push((SETTINGS, if zh { "设置" } else { "Settings" }, Icon::Settings, false));
+    choices.push((ABOUT, if zh { "关于本机" } else { "About this PC" }, Icon::Cpu, false));
     choices.push((CHECK, if zh { "检查更新" } else { "Check for updates" }, Icon::Update, false));
     choices.push((QUIT, if zh { "退出 Glance" } else { "Quit Glance" }, Icon::Quit, true));
     let items: Vec<Item<'static>> = choices.iter().map(|(choice, label, icon, rule_before)| Item { label, mark: Some(crate::ui::menu::Mark::Icon(*icon)), checked: *choice == DOCK && dock_on, rule_before: *rule_before }).collect();
@@ -369,6 +372,7 @@ pub fn chosen(choice: Option<usize>, choices: &[usize]) {
             std::thread::spawn(move || crate::app().set_dock(on));
         }
         SETTINGS => crate::show_settings(icon_place()),
+        ABOUT => crate::show_about(icon_place()),
         CHECK => crate::update::check_now(crate::update::Asker::Tray),
         QUIT => crate::quit(),
         _ => {}

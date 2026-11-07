@@ -1508,7 +1508,7 @@ impl Controller {
                         // On one of several chosen together: their menu.
                         Some(_) if !together.is_empty() => {
                             menu = cursor_position().and_then(|at| crate::station::many_menu(&together, at, true, look)).map(|(open, choices)| (open, MenuFor::Many(together, choices)));
-                            keep_menu_above(&menu, &mut overlay);
+                            keep_menu_above(&menu, &mut overlay, &mut dock);
                         }
                         Some(Hit::Shelf(id) | Hit::Copied(id)) => {
                             menu = cursor_position().and_then(|at| crate::station::menu(id, at, true, look)).map(|(open, choices)| (open, MenuFor::Station(id, choices, None)));

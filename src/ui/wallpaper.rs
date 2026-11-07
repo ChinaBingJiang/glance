@@ -226,6 +226,12 @@ fn shown_in(printed: &Printed, work: RECT, width: u32, height: u32) -> Option<Ve
     }
 }
 
+/// The wallpaper's image file, as the settings' display gallery would show it
+/// on each screen; `None` for a plain colour.
+pub fn current_path() -> Option<String> {
+    wallpaper_path()
+}
+
 /// The wallpaper's image file; `None` for a plain colour.
 fn wallpaper_path() -> Option<String> {
     let mut path = [0u16; 260];
