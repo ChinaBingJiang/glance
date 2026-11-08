@@ -133,6 +133,10 @@ const ITEM_INSET: f32 = 12.0 + 20.0 + 12.0;
 const CHEVRON_ROOM: f32 = 28.0;
 /// How large a chevron is drawn.
 const CHEVRON: f32 = 14.0;
+/// An open picker's list: the height of one of its words, and the most a pane shows at once —
+/// a longer list is kept within that and turned by the wheel (see `paint_hub_menu`).
+const DROP_LINE: f32 = 34.0;
+const DROP_CAP: f32 = 314.0;
 /// The screens in the layout's editor: a screen's picture's corners; and the dashes of an edge the pointer passes on
 /// from (the least they are long, and apart).
 const MAP_RADIUS: f32 = 3.0;
@@ -1428,6 +1432,36 @@ enum Field {
     TaskbarAlign,
     /// How the wallpaper fills the screen.
     WallpaperStyle,
+    /// The clock's hours: the 24, or the twelve with which half of the day after them.
+    ClockHour,
+    /// The tongue the display is worn in, chosen from the packs the machine carries.
+    DisplayLanguage,
+    /// The short date's pattern.
+    ShortDate,
+    /// The long date's pattern, the weekday and all.
+    LongDate,
+    /// The regional format: the locale whose shapes — numbers, money, calendar — the
+    /// machine wears.
+    RegionFormat,
+    /// The country or region the machine stands in.
+    Country,
+    /// The clock's shape, to the minute or the second, on the 24 or the 12.
+    TimePattern,
+    /// The zone the clock stands in.
+    TimeZone,
+}
+
+/// The short date patterns the language page offers, said as Windows keeps them.
+const SHORT_DATES: [&str; 6] = ["yyyy/M/d", "yyyy-MM-dd", "M/d/yyyy", "d/M/yyyy", "MM/dd/yyyy", "yyyy'年'M'月'd'日'"];
+/// The long date patterns, which carry the weekday too.
+const LONG_DATES: [&str; 5] = ["yyyy'年'M'月'd'日'", "yyyy/MM/dd", "yyyy-MM-dd", "dddd, MMMM d, yyyy", "MMMM d, yyyy"];
+
+/// What a row of `switch_card` ends with at its right: the machine's own switch with the
+/// word that tells what it does beside it, or a box that opens a list of the words to
+/// choose one from.
+enum CardEnd {
+    Switch(String, bool, bool, Target),
+    Picker(Field),
 }
 
 /// How a button looks: outlined; filled in the accent (the one thing to
@@ -1583,8 +1617,7 @@ enum Switch {
     DockMagnify,
     DockRunning,
     DockShowOpen,
-    /// Whether the clock runs 24-hour, and shows seconds: the machine's own, read live (see `system_settings`).
-    Clock24,
+    /// Whether the clock shows seconds: the machine's own, read live (see `system_settings`).
     Seconds,
     /// The system's own switches: animation, transparency, accent on borders.
     AnimOn,
@@ -2363,6 +2396,10 @@ struct Ui {
     /// The choice row whose list of options stands open, and the box that list hangs from.
     open_dropdown: Option<Field>,
     dropdown_anchor: Option<Rect>,
+    /// A hub pane's open list, kept back to be drawn over the whole pane once every card of it
+    /// is laid (see `paint_hub_menu`), and how far that list is turned by the wheel.
+    hub_menu: Option<(Field, Rect)>,
+    dropdown_scroll: f32,
     motion: HashMap<String, Transition>,
     /// Thumbs land where they belong without sliding (after relabelling).
     settle_thumbs: bool,
@@ -2674,6 +2711,8 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             privacy_capability: "Location".into(),
             open_dropdown: None,
             dropdown_anchor: None,
+            hub_menu: None,
+            dropdown_scroll: 0.0,
             motion: HashMap::new(),
             settle_thumbs: true,
             by_hand: false,
@@ -3346,7 +3385,7 @@ impl Ui {
             (Page::DateTime, _) => {
                 let lang = self.lang;
                 rows.push(Row::Group(pick(lang, "日期与时间", "Date & Time")));
-                rows.push(Row::Switch(Switch::Clock24));
+                rows.push(Row::Choice(Field::ClockHour));
                 rows.push(Row::Switch(Switch::Seconds));
                 let zone = super::system_settings::current_zone();
                 rows.push(Row::Info(format!(
@@ -3687,8 +3726,8 @@ impl Ui {
                     Row::Choice(Field::CombineIcons),
                     Row::Note(pick(
                         lang,
-                        "任务栏的改变即时生效；若未变，注销一次即可全部采用",
-                        "Taskbar changes take hold at once; should one linger, signing out gathers them all",
+                        "自动隐藏、小图标、对齐与合并即刻生效；位置与大小由资源管理器启动时读取，改后要注销一次才换上",
+                        "Hiding, the small icons, the alignment and how buttons combine take hold at once; the edge and the size are read when Explorer starts, so they change at the next sign-in",
                     )),
                 ]);
             }
@@ -3749,10 +3788,12 @@ impl Ui {
                     Row::Nav("登录项", "Login Items", "登录时启动的应用", "What starts of its own accord at sign-in", Target::Preview(Page::Startup)),
                     Row::Nav("日期与时间", "Date & Time", "时区、格式与校时", "The zone, the formats, the clock", Target::Preview(Page::DateTime)),
                     Row::Nav("辅助功能", "Accessibility", "高对比度与文字大小", "High contrast and the text's size", Target::Preview(Page::Access)),
+                    // The tongue and the date patterns are Glance's to change, so the page is
+                    // not among those left to Windows.
+                    Row::Nav("语言与地区", "Language & Region", "显示语言、地区格式与时区", "The display language, the formats and the zone", Target::Preview(Page::Language)),
                 ]);
                 rows.push(Row::Group(pick(lang, "由 Windows 的设置页接管", "Left to Windows' own pages")));
                 rows.extend([
-                    Row::Nav("语言与地区", "Language & Region", "显示语言、格式与键盘", "The display language, its formats, the keyboard", Target::Preview(Page::Language)),
                     Row::Nav("隔空投送与接力（就近共享）", "AirDrop & Handoff (nearby sharing)", "就近收发文件、跨机接续任务", "Files to a nearby PC, a task carried across", Target::Preview(Page::Nearby)),
                     Row::Nav("共享（网络和共享中心）", "Sharing (network and sharing)", "文件夹与打印机的共享", "The folders and printers shared out", Target::Preview(Page::Sharing)),
                     Row::Nav("时间机器（Windows 备份）", "Time Machine (Windows Backup)", "备份与还原", "Backup and restore", Target::Preview(Page::Backup)),
@@ -3946,6 +3987,8 @@ impl Ui {
             self.drag = None;
             self.open_dropdown = None;
             self.dropdown_anchor = None;
+            self.hub_menu = None;
+            self.dropdown_scroll = 0.0;
             self.raise_more();
         }
         self.next_frame = Instant::now();
@@ -4718,6 +4761,13 @@ impl Ui {
         self.layout().last().map_or(0.0, |(_, y, h)| y + h) + PAD_BOTTOM
     }
 
+    /// Choices shown as a box that opens a list rather than as a row of pills: those whose
+    /// words are longer than they are few, and the clock's hours, which Windows itself puts
+    /// in a list.
+    fn dropped(field: Field) -> bool {
+        matches!(field, Field::TaskbarSize | Field::TaskbarAlign | Field::ClockHour | Field::DisplayLanguage | Field::ShortDate | Field::LongDate | Field::RegionFormat | Field::Country | Field::TimePattern | Field::TimeZone)
+    }
+
     /// The labels of a row of choices, and which is chosen.
     fn choices(&self, field: Field) -> (&'static str, Vec<String>, Option<usize>) {
         let lang = self.lang;
@@ -4899,6 +4949,50 @@ impl Ui {
                     _ => 4,
                 }),
             ),
+            Field::ClockHour => (
+                pick(lang, "小时制", "Hours"),
+                vec![s("24 小时", "24-hour"), s("12 小时", "12-hour")],
+                Some(if super::system_settings::clock_24() { 0 } else { 1 }),
+            ),
+            // The tongues are the packs this PC carries, and no others: a language without
+            // its pack is not worn whatever is asked, so it is not offered.
+            Field::DisplayLanguage => {
+                let tags = super::system_settings::ui_languages();
+                let names = tags.iter().map(|tag| format!("{} · {tag}", super::system_settings::language_name(tag, lang))).collect();
+                (pick(lang, "显示语言", "Display language"), names, super::system_settings::worn_language())
+            }
+            Field::ShortDate => (
+                pick(lang, "短日期", "Short date"),
+                SHORT_DATES.iter().map(|pattern| pattern.to_string()).collect(),
+                SHORT_DATES.iter().position(|pattern| pattern.eq_ignore_ascii_case(&super::system_settings::short_date())),
+            ),
+            Field::LongDate => (
+                pick(lang, "长日期", "Long date"),
+                LONG_DATES.iter().map(|pattern| pattern.to_string()).collect(),
+                LONG_DATES.iter().position(|pattern| pattern.eq_ignore_ascii_case(&super::system_settings::long_date())),
+            ),
+            // The rest of what the locale holds: the format the shapes come from, the
+            // country the machine stands in, the clock's shape and the zone it keeps.
+            Field::RegionFormat => {
+                let tags = super::system_settings::regional_formats();
+                let names = tags.iter().map(|tag| format!("{} · {tag}", super::system_settings::format_name(tag))).collect();
+                (pick(lang, "地区格式", "Regional format"), names, super::system_settings::current_format())
+            }
+            Field::Country => {
+                let list = super::system_settings::countries();
+                let names = list.iter().map(|(_, name, code)| format!("{name} · {code}")).collect();
+                (pick(lang, "国家或地区", "Country or region"), names, super::system_settings::current_country())
+            }
+            Field::TimePattern => (
+                pick(lang, "时间", "Time"),
+                super::system_settings::time_patterns().iter().map(|pattern| pattern.to_string()).collect(),
+                super::system_settings::current_time_pattern(),
+            ),
+            Field::TimeZone => {
+                let list = super::system_settings::zone_choices();
+                let names = list.iter().map(|(id, said)| if said.is_empty() { id.clone() } else { said.clone() }).collect();
+                (pick(lang, "时区", "Time zone"), names, super::system_settings::current_zone_at())
+            }
             // (The rest are slid rather than chosen: see `slider`.)
             Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => (self.slider(field).0, Vec::new(), None),
         }
@@ -4953,6 +5047,34 @@ impl Ui {
             Field::TaskbarSize => super::system_settings::set_taskbar_size([0, 1, 2][index]),
             Field::TaskbarAlign => super::system_settings::set_taskbar_align([0, 1][index]),
             Field::WallpaperStyle => super::system_settings::set_wallpaper_style([10, 6, 2, 0, 0][index]),
+            Field::ClockHour => super::system_settings::set_clock_24(index == 0),
+            Field::DisplayLanguage => {
+                if let Some(tag) = super::system_settings::ui_languages().get(index).cloned() {
+                    super::system_settings::set_preferred_language(&tag);
+                }
+            }
+            Field::ShortDate => super::system_settings::set_short_date(SHORT_DATES[index]),
+            Field::LongDate => super::system_settings::set_long_date(LONG_DATES[index]),
+            Field::RegionFormat => {
+                if let Some(tag) = super::system_settings::regional_formats().get(index).cloned() {
+                    super::system_settings::set_regional_format(&tag);
+                }
+            }
+            Field::Country => {
+                if let Some((id, _, code)) = super::system_settings::countries().get(index) {
+                    super::system_settings::set_country(*id, code);
+                }
+            }
+            Field::TimePattern => {
+                if let Some(pattern) = super::system_settings::time_patterns().get(index) {
+                    super::system_settings::set_time_pattern(pattern);
+                }
+            }
+            Field::TimeZone => {
+                if let Some((id, _)) = super::system_settings::zone_choices().get(index) {
+                    super::system_settings::set_zone(id);
+                }
+            }
             // (Slid rather than chosen: see `set_slider`.)
             Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => {}
         }
@@ -5267,7 +5389,6 @@ impl Ui {
                 };
                 return (p("开启手机互联", "Phone remote"), Some(Cow::Borrowed(hint)), self.remote);
             }
-            Switch::Clock24 => (p("24 小时制", "24-hour clock"), None, super::system_settings::clock_24()),
             Switch::Seconds => (p("显示秒数", "Show seconds"), None, super::system_settings::clock_seconds()),
             Switch::AnimOn => (
                 p("动画效果", "Animations"),
@@ -5376,7 +5497,6 @@ impl Ui {
             Switch::DockRunning => settings.dock.running ^= true,
             Switch::DockShowOpen => settings.dock.show_open ^= true,
             // The machine's own clock switches write the registry and go on: nothing of Glance's settings changes.
-            Switch::Clock24 => super::system_settings::toggle_clock24(),
             Switch::Seconds => super::system_settings::toggle_seconds(),
             Switch::AnimOn => super::system_settings::set_system_animation(!super::system_settings::system_animation()),
             Switch::Glass => super::system_settings::set_system_transparent(!super::system_settings::system_transparent()),
@@ -6162,8 +6282,12 @@ impl Ui {
             Target::Choice(field, index) => {
                 // A dropdown's box pressed on the word it already reads opens or shuts its
                 // list rather than setting anything; a word pressed in the list sets it and shuts.
-                if matches!(field, Field::TaskbarSize | Field::TaskbarAlign) && self.choices(field).2 == Some(index) {
+                if Self::dropped(field) && self.choices(field).2 == Some(index) {
                     self.open_dropdown = if self.open_dropdown == Some(field) { None } else { Some(field) };
+                    // The list opens with the worn word in its middle, however far down it lies.
+                    if self.open_dropdown.is_some() {
+                        self.dropdown_scroll = (index as f32 * DROP_LINE - DROP_CAP / 2.0 + DROP_LINE / 2.0).max(0.0);
+                    }
                     self.next_frame = Instant::now();
                 } else {
                     self.choose(field, index);
@@ -6393,7 +6517,9 @@ impl Ui {
             }
             // A display told to wear a mode; left as it was if the driver will not draw it.
             Target::ModeApply { device, wide, tall, hz } => {
-                crate::sys::set_mode(&device, crate::sys::Mode { wide, tall, hz });
+                if !crate::sys::set_mode(&device, crate::sys::Mode { wide, tall, hz }) {
+                    crate::journal::note(format!("settings: the screen would not wear {wide}×{tall}"));
+                }
                 self.next_frame = Instant::now();
             }
             // The night light warmed, or washed off at depth none.
@@ -6735,9 +6861,18 @@ impl Ui {
             return;
         }
         if !(NAV..NAV + self.pane()).contains(&x) {
-            // Past the list, on the 通用 hub: its right pane is what moves, whether a sub-item's
-            // cards or the landing's column of them.
-            if self.page == Page::System {
+            // Past the list: the right pane is what moves — the 通用 hub's column of cards, or a
+            // page's own preview when its content reaches below the pane's bottom (Display's rows,
+            // Privacy's apps).
+            // While a picker's list stands open over the pane, the wheel turns the list itself.
+            if let Some((field, _)) = self.hub_menu {
+                let full = DROP_LINE * self.choices(field).1.len() as f32 + 8.0;
+                let most = (full - DROP_CAP).max(0.0);
+                self.dropdown_scroll = (self.dropdown_scroll - delta as f32 / 120.0 * WHEEL).clamp(0.0, most);
+                self.next_frame = Instant::now();
+                return;
+            }
+            if matches!(self.page, Page::System | Page::Display | Page::Privacy) {
                 let most = self.hub_most();
                 if most > 0.0 {
                     self.hub_scroll_target = (self.hub_scroll_target - delta as f32 / 120.0 * WHEEL).clamp(0.0, most);
@@ -7453,7 +7588,7 @@ impl Ui {
                     if field == Field::TaskbarPosition {
                         text_centred(frame, name, label, palette.text, left + ROW_SIDE, y + ROW / 2.0, width - 2.0 * ROW_SIDE, Align::Start);
                         self.position_cards(frame, palette, field, &options, chosen, left + ROW_SIDE, y + ROW, width - 2.0 * ROW_SIDE, &hovered);
-                    } else if matches!(field, Field::TaskbarSize | Field::TaskbarAlign) {
+                    } else if Self::dropped(field) {
                         self.dropdown_row(frame, palette, field, name, &options, chosen, left, y, width, row_height, label, hint, now, &hovered);
                     } else {
                         match self.choice_hint(field) {
@@ -8508,7 +8643,7 @@ impl Ui {
                 Some(Page::Startup) => pick(lang, "登录时启动的应用", "What starts of its own accord at sign-in"),
                 Some(Page::DateTime) => pick(lang, "时区、格式与校时", "The zone, the formats, the clock"),
                 Some(Page::Access) => pick(lang, "高对比度与文字大小", "High contrast and the text's size"),
-                Some(Page::Language) => pick(lang, "显示语言、格式与键盘", "The display language, its formats, the keyboard"),
+                Some(Page::Language) => pick(lang, "显示语言、地区格式与时区", "The display language, the formats and the zone"),
                 Some(Page::Nearby) => pick(lang, "就近收发文件、跨机接续任务", "Files to a nearby PC, a task carried across"),
                 Some(Page::Sharing) => pick(lang, "文件夹与打印机的共享", "The folders and printers shared out"),
                 Some(Page::Backup) => pick(lang, "备份与还原", "Backup and restore"),
@@ -8528,6 +8663,9 @@ impl Ui {
             Page::Gaming => pick(lang, "游戏模式与 DVR", "Game Mode and the DVR"),
             Page::Appearance => pick(lang, "主题预览与确认", "Theme preview and confirm"),
             Page::Desktop => pick(lang, "任务栏在屏幕一角的模样", "The taskbar as it stands on your screen"),
+            Page::Dock => pick(lang, "Dock 在它站的那条边上", "The dock along the edge it stands on"),
+            Page::Launchpad => pick(lang, "启动台的那一页怎么排", "How the launchpad lays its page"),
+            Page::Accessibility => pick(lang, "对比度、文字与光标穿上后的样子", "Contrast, the text and the pointer, worn"),
             _ => pick(lang, "实时数据", "Live readings"),
         };
         let title_w = frame.gfx.measure(title, head);
@@ -8553,6 +8691,7 @@ impl Ui {
                     let scroll = self.hub_scroll.min(self.hub_most());
                     self.hub_tall = 0.0;
                     let painted = self.targets.len();
+                    self.hub_menu = None;
                     unsafe { frame.dc.PushAxisAlignedClip(&rect(area.x, area.y, area.w, area.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
                     frame.origin(0.0, -scroll);
                     match self.page {
@@ -8562,6 +8701,9 @@ impl Ui {
                         Page::DateTime => self.paint_datetime_preview(frame, palette, area),
                         _ => self.paint_os_plain(frame, palette, area),
                     }
+                    // The list one of the pane's pickers left standing: drawn over every card,
+                    // in the pane's own scrolled room, as the cards were.
+                    self.paint_hub_menu(frame, palette);
                     frame.origin(0.0, 0.0);
                     unsafe { frame.dc.PopAxisAlignedClip() };
                     self.page = before;
@@ -8620,9 +8762,12 @@ impl Ui {
             Page::ScreenTime => self.paint_screen_time_preview(frame, palette, area),
             Page::Wallpaper => self.paint_wallpaper_preview(frame, palette, area),
             Page::Desktop => self.paint_desktop_preview(frame, palette, area),
+            Page::Dock => self.paint_dock_preview(frame, palette, area),
+            Page::Launchpad => self.paint_launchpad_preview(frame, palette, area),
+            Page::Accessibility => self.paint_accessibility_preview(frame, palette, area),
             _ => {}
         }
-        if matches!(self.page, Page::Wifi | Page::Bluetooth | Page::Network | Page::Display | Page::Sound | Page::Notifications | Page::Storage | Page::Privacy | Page::Gaming | Page::Power | Page::ScreenTime | Page::Wallpaper | Page::Desktop) {
+        if matches!(self.page, Page::Wifi | Page::Bluetooth | Page::Network | Page::Display | Page::Sound | Page::Notifications | Page::Storage | Page::Privacy | Page::Gaming | Page::Power | Page::ScreenTime | Page::Wallpaper | Page::Desktop | Page::Dock | Page::Launchpad | Page::Accessibility) {
             return None;
         }
 
@@ -8899,15 +9044,35 @@ impl Ui {
     /// rotation as segmented choices that write back, and the colour profile and HDR read
     /// only — a press there leads to Windows' own page. The scale is set here too.
     fn paint_display_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        // The rows outgrow the pane on most screens, so the pane shows only what stands within
+        // it and the wheel walks the rest: the content shifts up by the scroll and the
+        // clickables with it, as in the hub's right pane.
+        let scroll = self.hub_scroll.min(self.hub_most());
+        let painted = self.targets.len();
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(area.x, area.y, area.w, area.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        frame.origin(0.0, -scroll);
+        self.display_pane(frame, palette, area, scroll);
+        frame.origin(0.0, 0.0);
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        // (What the last row reaches past the pane's bottom is what the wheel may still turn.)
+        self.hub_tall = area.h + self.hanging;
+        self.hub_shifted(frame, palette, area, painted, scroll);
+    }
+
+    fn display_pane(&mut self, frame: &Frame, palette: &Palette, area: Rect, scroll: f32) {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
-        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
-        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        // The card behind the rows, drawn as long as the scroll can lift, so its bottom keeps
+        // the pane while the rows slide off its top.
+        let veil = Rect { x: area.x, y: area.y - scroll, w: area.w, h: area.h + scroll };
+        fill(frame, palette.card, veil.x, veil.y, veil.w, veil.h, 8.0);
+        stroke_inside(frame, veil, 8.0, palette.card_stroke);
         let margin = 20.0;
         let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
         let say = |text: &str| {
             text_centred(frame, text, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, inner.y + 10.0, inner.w, Align::Start);
         };
+        self.hanging = 0.0;
         if self.screens.is_empty() {
             say(&p("没有读到显示器。", "No display was read."));
             return;
@@ -9093,6 +9258,8 @@ impl Ui {
             let kind = if now_night == level { Button::Accent } else { Button::Plain };
             right = self.button(frame, palette, &word, right, y + 12.0, Target::NightSet(level), kind, &None) - 8.0;
         }
+        // (The buttons stand at the middle of `y + 12`; the pane wants its padding under them.)
+        self.hanging = (y + 28.0 + margin - (area.y + area.h)).max(0.0);
     }
 
     /// Sound's preview: the device picked at the left (or the default one things play through), its
@@ -9301,10 +9468,29 @@ impl Ui {
     /// middle column; the one picked there names the head. The reading runs PowerShell, so it is
     /// taken off-thread. The other categories stay Windows' own.
     fn paint_privacy_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        // The list of apps outgrows the pane on a machine with many of them, so the pane is a
+        // window onto it: the content shifts up by the scroll, clipped to the pane, and the
+        // clickables along with it — the same machinery the hub's right pane runs on.
+        let scroll = self.hub_scroll.min(self.hub_most());
+        let painted = self.targets.len();
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(area.x, area.y, area.w, area.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        frame.origin(0.0, -scroll);
+        self.privacy_pane(frame, palette, area, scroll);
+        frame.origin(0.0, 0.0);
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        // (How far past the pane's bottom the lines reach is how far the wheel may still turn.)
+        self.hub_tall = area.h + self.hanging;
+        self.hub_shifted(frame, palette, area, painted, scroll);
+    }
+
+    fn privacy_pane(&mut self, frame: &Frame, palette: &Palette, area: Rect, scroll: f32) {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
-        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
-        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        // The card behind the content, drawn as long as the scroll can lift: its bottom stays
+        // with the pane while the lines above it slide away.
+        let veil = Rect { x: area.x, y: area.y - scroll, w: area.w, h: area.h + scroll };
+        fill(frame, palette.card, veil.x, veil.y, veil.w, veil.h, 8.0);
+        stroke_inside(frame, veil, 8.0, palette.card_stroke);
         let margin = 20.0;
         let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
         let say = |text: &str| {
@@ -9351,7 +9537,8 @@ impl Ui {
             self.targets.push((Rect { x: inner.x, y, w: inner.w, h: row }, target));
             y += row;
         }
-        self.hanging = (y - (area.y + area.h)).max(0.0);
+        // (The last line's bottom, less the pane's: what the scroll has left to give.)
+        self.hanging = (y + margin - (area.y + area.h)).max(0.0);
     }
 
     /// Gaming's preview: whether Game Mode takes over, and whether the DVR records. A quick
@@ -9588,8 +9775,7 @@ impl Ui {
         y + h + 14.0
     }
 
-    /// A card of rows each with a switch at its right: a name at the left, a word just
-    /// left of the switch, the switch itself, and the whole row pressed as one. A heading
+    /// A card of rows each ending at its right in a switch or in a box of choices. A heading
     /// and a line said under it where the card has them. Returns where the next card begins.
     fn switch_card(
         &mut self,
@@ -9600,7 +9786,7 @@ impl Ui {
         width: f32,
         heading: Option<&str>,
         said: Option<&str>,
-        rows: &[(String, String, bool, bool, Target)],
+        rows: &[(String, CardEnd)],
         font: Font,
         hint: Font,
     ) -> f32 {
@@ -9626,22 +9812,94 @@ impl Ui {
         }
         let switch_left = x + width - pad - switch;
         let now = Instant::now();
-        for (at, (name, aside, on, enabled, target)) in rows.iter().enumerate() {
+        // How low the lowest open list reaches: a long one (the zones are a hundred and
+        // forty four) is let into the height the pane may be scrolled through, so its last
+        // word is reachable rather than cut off below the pane.
+        let mut hung = 0.0f32;
+        for (at, (name, end)) in rows.iter().enumerate() {
             if at > 0 {
                 fill(frame, palette.rule, x + pad, cy, width - 2.0 * pad, 1.0, 0.0);
             }
             let middle = cy + row / 2.0;
-            text_centred(frame, name, font, palette.text, x + pad, middle, (switch_left - 32.0 - x - pad).max(40.0), Align::Start);
-            let aw = frame.gfx.measure(aside, hint);
-            text_centred(frame, aside, hint, palette.text2, switch_left - 14.0 - aw, middle, aw, Align::Start);
-            let pressed = self.pressed == Some(target.clone());
-            self.toggle(frame, palette, format!("toggle:{name}"), *on, *enabled, switch_left, middle, now, pressed);
-            self.targets.push((Rect { x, y: cy, w: width, h: row }, target.clone()));
+            match end {
+                CardEnd::Switch(aside, on, enabled, target) => {
+                    text_centred(frame, name, font, palette.text, x + pad, middle, (switch_left - 32.0 - x - pad).max(40.0), Align::Start);
+                    let aw = frame.gfx.measure(aside, hint);
+                    text_centred(frame, aside, hint, palette.text2, switch_left - 14.0 - aw, middle, aw, Align::Start);
+                    let pressed = self.pressed == Some(target.clone());
+                    self.toggle(frame, palette, format!("toggle:{name}"), *on, *enabled, switch_left, middle, now, pressed);
+                    self.targets.push((Rect { x, y: cy, w: width, h: row }, target.clone()));
+                }
+                CardEnd::Picker(which) => {
+                    let field = *which;
+                    let letter = Font::new(Family::Segoe, 13.0, 400.0);
+                    let (_, words, chosen) = self.choices(field);
+                    let widest = words.iter().map(|word| frame.gfx.measure(word, letter)).fold(0.0f32, f32::max);
+                    let bw = (widest + 44.0).clamp(96.0, (width - 2.0 * pad - 130.0).max(96.0));
+                    let box_ = Rect { x: x + width - pad - bw, y: middle - 16.0, w: bw, h: 32.0 };
+                    text_centred(frame, name, font, palette.text, x + pad, middle, (box_.x - 12.0 - x - pad).max(40.0), Align::Start);
+                    let open = self.open_dropdown == Some(field);
+                    fill(frame, if open { palette.hover } else { palette.control }, box_.x, box_.y, box_.w, box_.h, 6.0);
+                    stroke_inside(frame, box_, 6.0, if open { palette.selection } else { palette.card_stroke });
+                    if let Some(at) = chosen.filter(|at| *at < words.len()) {
+                        text_centred(frame, &words[at], letter, palette.text, box_.x + 12.0, middle, box_.w - 36.0, Align::Start);
+                    }
+                    frame.icon(Icon::ChevronDown, Point { x: box_.x + box_.w - 16.0, y: middle }, CHEVRON, palette.text2);
+                    self.targets.push((box_, Target::Choice(field, chosen.unwrap_or(0))));
+                    if open {
+                        // The list is kept back to be drawn over the whole pane once every card is
+                        // laid (see `paint_hub_menu`): drawn here it would sit under the rows that
+                        // come after it. Its room is counted all the same, capped to what shows.
+                        self.hub_menu = Some((field, box_));
+                        let full = DROP_LINE * words.len() as f32 + 8.0;
+                        hung = hung.max(box_.y + box_.h + 4.0 + full.min(DROP_CAP));
+                    }
+                }
+            }
             cy += row;
         }
         // (Where the card ends is kept for the pane's scroll: see `hub_tall`.)
-        self.drawn = y + h + 14.0;
+        self.drawn = (y + h + 14.0).max(hung + 14.0);
         y + h + 14.0
+    }
+
+    /// The list an open picker has left standing: drawn after every card of the pane, over them
+    /// all, so no row laid later covers a word of it. A list longer than the pane shows is kept
+    /// within its own height and turned by the wheel (see `wheel`).
+    fn paint_hub_menu(&mut self, frame: &Frame, palette: &Palette) {
+        let Some((field, at)) = self.hub_menu else { return };
+        let (_, words, chosen) = self.choices(field);
+        let full = DROP_LINE * words.len() as f32 + 8.0;
+        let cap = full.min(DROP_CAP);
+        let most = (full - cap).max(0.0);
+        self.dropdown_scroll = self.dropdown_scroll.clamp(0.0, most);
+        let menu = Rect { x: at.x, y: at.y + at.h + 4.0, w: at.w, h: cap };
+        // The box gives up its own place while the list stands, so a press elsewhere shuts it.
+        self.targets.retain(|(_, target)| !matches!(target, Target::Choice(f, _) if *f == field));
+        let _ = skins::shadows(frame, &[(menu, 6.0)], &[Shadow { y: 2.0, blur: 12.0, spread: 0.0, color: Color::hex(0x000000, 0.16) }]);
+        fill(frame, palette.window, menu.x, menu.y, menu.w, menu.h, 6.0);
+        stroke_inside(frame, menu, 6.0, palette.card_stroke);
+        let letter = Font::new(Family::Segoe, 13.0, 400.0);
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(menu.x, menu.y, menu.w, menu.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        for (i, word) in words.iter().enumerate() {
+            let r = Rect { x: menu.x + 4.0, y: menu.y + 4.0 + i as f32 * DROP_LINE - self.dropdown_scroll, w: menu.w - 8.0, h: DROP_LINE };
+            // (What is turned clean out of the list is neither drawn nor pressed.)
+            if r.y + r.h <= menu.y || r.y >= menu.y + menu.h {
+                continue;
+            }
+            if chosen == Some(i) {
+                fill(frame, palette.hover, r.x, r.y, r.w, r.h, 4.0);
+            }
+            text_centred(frame, word, letter, palette.text, r.x + 12.0, r.y + DROP_LINE / 2.0, r.w - 24.0, Align::Start);
+            self.targets.push((r, Target::Choice(field, i)));
+        }
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        // A hairline of a thumb, when the list is longer than the pane shows.
+        if most > 0.0 {
+            let thumb = (cap * cap / full).max(20.0);
+            let at = menu.y + 4.0 + (cap - 8.0 - thumb) * (self.dropdown_scroll / most);
+            fill(frame, palette.text3.alpha(0.6), menu.x + menu.w - 7.0, at, 3.0, thumb, 1.5);
+        }
     }
 
     /// The hub's sentence under its last card: told in lines `col` wide, and kept
@@ -9676,12 +9934,12 @@ impl Ui {
                 let named = |app: &crate::sys::Startup| app.display.eq_ignore_ascii_case("glance") || app.name.eq_ignore_ascii_case("glance");
                 // Glance's own entry is the switch at the top, never a second one below.
                 let kept: Vec<&crate::sys::Startup> = apps.iter().filter(|app| !named(app)).collect();
-                let rows: Vec<(String, String, bool, bool, Target)> = kept
+                let rows: Vec<(String, CardEnd)> = kept
                     .iter()
                     .take(16)
                     .map(|app| {
                         let hive = if app.machine { p("本机", "Machine") } else { p("本用户", "User") };
-                        (app.display.clone(), hive, app.enabled, true, Target::Startup(app.machine, app.name.clone(), !app.enabled))
+                        (app.display.clone(), CardEnd::Switch(hive, app.enabled, true, Target::Startup(app.machine, app.name.clone(), !app.enabled)))
                     })
                     .collect();
                 let said = if reading {
@@ -9690,7 +9948,7 @@ impl Ui {
                     let on = kept.iter().filter(|app| app.enabled).count() + usize::from(self.autostart);
                     format!("{} {} · {}", p("允许自启", "Allowed"), on, kept.len() + 1)
                 };
-                let mut to = vec![(p("Glance", "Glance"), p("本应用", "This app"), self.autostart, self.may_autostart, Target::Switch(Switch::Startup))];
+                let mut to = vec![(p("Glance", "Glance"), CardEnd::Switch(p("本应用", "This app"), self.autostart, self.may_autostart, Target::Switch(Switch::Startup)))];
                 to.extend(rows);
                 let after = self.switch_card(frame, palette, x, y, col, Some(&p("登录时启动", "At sign-in")), Some(&said), &to, font, hint);
                 self.grouped_card(frame, palette, x, after, col, None, &[], Some((p("Windows 登录项设置…", "Windows' login items…"), "ms-settings:startupapps")), font, hint);
@@ -9707,24 +9965,15 @@ impl Ui {
                 let said = vec![
                     (
                         p("高对比度", "High contrast"),
-                        if sys::high_contrast() { p("开", "On") } else { p("关", "Off") },
-                        sys::high_contrast(),
-                        true,
-                        Target::Switch(Switch::HighContrast),
+                        CardEnd::Switch(if sys::high_contrast() { p("开", "On") } else { p("关", "Off") }, sys::high_contrast(), true, Target::Switch(Switch::HighContrast)),
                     ),
                     (
                         p("透明效果", "Transparent effects"),
-                        if sys::system_transparent() { p("开", "On") } else { p("关", "Off") },
-                        sys::system_transparent(),
-                        true,
-                        Target::Switch(Switch::Glass),
+                        CardEnd::Switch(if sys::system_transparent() { p("开", "On") } else { p("关", "Off") }, sys::system_transparent(), true, Target::Switch(Switch::Glass)),
                     ),
                     (
                         p("动画效果", "Animation effects"),
-                        if sys::system_animation() { p("开", "On") } else { p("关", "Off") },
-                        sys::system_animation(),
-                        true,
-                        Target::Switch(Switch::AnimOn),
+                        CardEnd::Switch(if sys::system_animation() { p("开", "On") } else { p("关", "Off") }, sys::system_animation(), true, Target::Switch(Switch::AnimOn)),
                     ),
                 ];
                 let after = self.switch_card(frame, palette, x, y, col, Some(&p("显示", "Display")), None, &said, font, hint);
@@ -9751,25 +10000,39 @@ impl Ui {
                 self.hub_note(frame, palette, &p("文字缩放要注销并重新登录才完全生效；上面三个开关即时采用。", "A change to the text size takes full hold after signing out and back in; the three switches above are taken at once."), x, after + 16.0, col, hint);
             }
             Page::Language => {
-                // The tongue the machine is worn in, the region whose formats it
-                // carries, and the zone it keeps — all read as Windows has them now,
-                // since a display language is only worn again after signing out.
-                let tongues = sys::preferred_languages();
-                let said = if tongues.is_empty() { sys::locale_name() } else { tongues.join(", ") };
+                // The tongue the display is worn in, the shapes the locale keeps and the
+                // zone the clock stands in are all Glance's to change: the language list is
+                // put in order, the locale's own shapes are copied over the user's, the
+                // country is written and told round, and the clock is moved. What is read
+                // but not kept here — the machine's own name for its locale — is told under
+                // the boxes, and the way on to Windows' page stays open at the foot.
+                let picks = vec![
+                    (p("显示语言", "Display language"), CardEnd::Picker(Field::DisplayLanguage)),
+                    (p("短日期", "Short date"), CardEnd::Picker(Field::ShortDate)),
+                    (p("长日期", "Long date"), CardEnd::Picker(Field::LongDate)),
+                ];
+                let after = self.switch_card(frame, palette, x, y, col, Some(&p("语言与日期格式", "Language & date formats")), None, &picks, font, hint);
+                let shapes = vec![
+                    (p("地区格式", "Regional format"), CardEnd::Picker(Field::RegionFormat)),
+                    (p("国家或地区", "Country or region"), CardEnd::Picker(Field::Country)),
+                    (p("时间", "Time"), CardEnd::Picker(Field::TimePattern)),
+                    (p("时区", "Time zone"), CardEnd::Picker(Field::TimeZone)),
+                ];
+                let after = self.switch_card(frame, palette, x, after, col, Some(&p("地区、数字与时区", "Region, numbers and the zone")), None, &shapes, font, hint);
+                // What the machine says of itself, told rather than chosen: it is the read-
+                // out of the shapes above, not a setting of its own.
                 let geo = sys::country_name(&sys::geo_name(), lang);
                 let zone = sys::current_zone();
                 let after = self.grouped_card(
                     frame,
                     palette,
                     x,
-                    y,
+                    after,
                     col,
-                    Some(&p("语言与地区", "Language & Region")),
+                    Some(&p("现在读到的", "As it reads now")),
                     &[
-                        (p("显示语言", "Display"), said),
                         (p("地区格式", "Regional format"), sys::locale_name()),
                         (p("国家或地区", "Country or region"), if geo.is_empty() { p("未知", "Unknown") } else { geo }),
-                        (p("短日期", "Short date"), sys::short_date()),
                         (p("时间", "Time"), sys::time_format()),
                         (p("时区", "Time zone"), if zone.is_empty() { p("未知", "Unknown") } else { zone }),
                     ],
@@ -9777,7 +10040,7 @@ impl Ui {
                     font,
                     hint,
                 );
-                self.hub_note(frame, palette, &p("换显示语言要注销并重新登录才全部生效；格式的其余半由系统保管。", "A display language is only worn again after signing out and back in; the rest of the formats are the system's to keep."), x, after + 16.0, col, hint);
+                self.hub_note(frame, palette, &p("日期、时间与数字格式即刻换上，时区即刻挪钟。显示语言要新开的程序才穿上，资源管理器与已开着的得注销一次；国家或地区即刻写进系统，程序多在启动时才读它。没有装语言包的语言不在列出的几个里。", "The date, time and number shapes are taken at once, and the zone moves the clock at once. A display language is worn by whatever opens after it; the shell and what already runs wait for a sign-out. The country is written at once, though most programs read it when they start. A tongue without its language pack is not among those listed."), x, after + 16.0, col, hint);
             }
             Page::Sharing => {
                 // The machine as the network knows it: its name and the workgroup or domain
@@ -9909,14 +10172,16 @@ impl Ui {
                 let on = level != 0;
                 let said = vec![(
                     p("就近共享", "Nearby sharing"),
-                    match level {
-                        1 => p("所有人", "Anyone near"),
-                        2 => p("我的设备", "My own devices"),
-                        _ => p("关", "Off"),
-                    },
-                    on,
-                    true,
-                    Target::Nearby(!on),
+                    CardEnd::Switch(
+                        match level {
+                            1 => p("所有人", "Anyone near"),
+                            2 => p("我的设备", "My own devices"),
+                            _ => p("关", "Off"),
+                        },
+                        on,
+                        true,
+                        Target::Nearby(!on),
+                    ),
                 )];
                 let after = self.switch_card(
                     frame,
@@ -10142,23 +10407,17 @@ impl Ui {
             hint,
         );
 
-        // The two things about the clock that Glance can change in place; the hour
-        // itself, the zone, and the correcting of it are Windows' to keep.
+        // The three things about the clock that Glance changes in place: the hours it
+        // counts on, whether the seconds are shown, and the zone it stands in. The hours
+        // and the zone are chosen from lists, as Windows itself puts them; the seconds are
+        // one switch.
         let rows = vec![
-            (
-                p("24 小时制", "The 24-hour clock"),
-                if sys::clock_24() { p("24 小时", "24-hour") } else { p("12 小时", "12-hour") },
-                sys::clock_24(),
-                true,
-                Target::Switch(Switch::Clock24),
-            ),
+            (p("小时制", "The hours"), CardEnd::Picker(Field::ClockHour)),
             (
                 p("显示秒数", "Seconds on the clock"),
-                if sys::clock_seconds() { p("显示", "Shown") } else { p("不显示", "Not shown") },
-                sys::clock_seconds(),
-                true,
-                Target::Switch(Switch::Seconds),
+                CardEnd::Switch(if sys::clock_seconds() { p("显示", "Shown") } else { p("不显示", "Not shown") }, sys::clock_seconds(), true, Target::Switch(Switch::Seconds)),
             ),
+            (p("时区", "Time zone"), CardEnd::Picker(Field::TimeZone)),
         ];
         let after = self.switch_card(frame, palette, x, after, col, Some(&p("时钟的样子", "The clock's face")), None, &rows, font, hint);
 
@@ -10180,9 +10439,9 @@ impl Ui {
             hint,
         );
         // The formats' other half — the tongue they are worn in — is chosen on the
-        // language page, so only the way on is given here: a link, not a card of its own.
-        text_centred(frame, &p("语言与地区设置…", "Language & Region settings…"), hint, palette.selection, x, after + 18.0, col, Align::Start);
-        self.targets.push((Rect { x, y: after + 4.0, w: col, h: 32.0 }, Target::Open("ms-settings:regionlanguage".to_string())));
+        // language page, which is Glance's own; so the way on leads there, not to Windows.
+        text_centred(frame, &p("语言与地区：显示语言与格式…", "Language & Region: the display language and the formats…"), hint, palette.selection, x, after + 18.0, col, Align::Start);
+        self.targets.push((Rect { x, y: after + 4.0, w: col, h: 32.0 }, Target::Preview(Page::Language)));
         // The clock is kept running to the second, so the card is drawn again to
         // show the one it has reached.
         self.next_frame = Instant::now() + Duration::from_millis(1000);
@@ -10457,6 +10716,68 @@ impl Ui {
         }
     }
 
+    /// Accessibility's preview: a window as the desktop would wear it under the settings —
+    /// the contrast's own colours, the words at the size slid, the pointer at the size
+    /// drawn — so what the rows do is seen rather than read back.
+    fn paint_accessibility_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let margin = 20.0;
+        let inner = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin };
+        let contrast = super::system_settings::high_contrast();
+        let scale = super::system_settings::text_scale().clamp(100, 225) as f32 / 100.0;
+        let cursor = super::system_settings::cursor_size();
+        // (High contrast wears its own face rather than the theme's: a black ground, white
+        // words, and the amber Windows keeps for what may be followed.)
+        let face = if contrast { Color::hex(0x000000, 1.0) } else { palette.window };
+        let ink = if contrast { Color::hex(0xFFFFFF, 1.0) } else { palette.text };
+        let faint = if contrast { Color::hex(0xFFFFFF, 0.82) } else { palette.text2 };
+        let mark = if contrast { Color::hex(0xFFD700, 1.0) } else { palette.selection };
+        let edge = if contrast { Color::hex(0xFFFFFF, 1.0) } else { palette.card_stroke };
+        text_centred(frame, &p("桌面会穿上这样", "As the desktop would wear it"), Font::new(Family::Segoe, 15.0, 600.0), palette.text, inner.x, inner.y, inner.w, Align::Start);
+        // The sample window, between the heading and the three readings under it.
+        let win = Rect { x: inner.x, y: inner.y + 26.0, w: inner.w, h: (inner.h - 26.0 - 118.0).clamp(110.0, 240.0) };
+        fill(frame, face, win.x, win.y, win.w, win.h, 8.0);
+        stroke_inside(frame, win, 8.0, edge);
+        let bar = 30.0;
+        fill(frame, edge, win.x + 1.0, win.y + bar, win.w - 2.0, 1.0, 0.0);
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(win.x, win.y, win.w, win.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        text_centred(frame, &p("示例窗口", "Sample window"), Font::new(Family::Segoe, 13.0 * scale, 600.0), ink, win.x + 14.0, win.y + bar / 2.0, win.w - 28.0, Align::Start);
+        let mut y = win.y + bar + 22.0;
+        for line in [p("文字随这里的设置一同放大。", "Text grows with the size you slide here."), p("高对比度换上黑底、白字与粗线。", "High contrast takes a black ground, white words, firm lines.")] {
+            text_centred(frame, &line, Font::new(Family::Segoe, 12.5 * scale, 400.0), faint, win.x + 14.0, y, win.w - 28.0, Align::Start);
+            y += 20.0 * scale;
+        }
+        text_centred(frame, &p("了解详情", "Learn more"), Font::new(Family::Segoe, 12.0 * scale, 400.0), mark, win.x + 14.0, y + 4.0, win.w - 28.0, Align::Start);
+        // The button, and the pointer beside it at the size the machine is set to show.
+        let label = p("确定", "OK");
+        let letter = Font::new(Family::Segoe, 12.5 * scale, 600.0);
+        let bw = frame.gfx.measure(&label, letter) + 26.0;
+        let bh = 28.0_f32.min(win.h * 0.3);
+        let by = win.y + win.h - 16.0 - bh;
+        fill(frame, mark, win.x + win.w - 16.0 - bw, by, bw, bh, 6.0);
+        text_middle(frame, &label, letter, if contrast { Color::hex(0x000000, 1.0) } else { palette.card }, win.x + win.w - 16.0 - bw / 2.0, by + bh / 2.0);
+        frame.icon(Icon::Pointer, Point { x: win.x + win.w - 16.0 - bw - 34.0, y: by + bh / 2.0 - 6.0 }, 14.0 + cursor as f32 * 2.2, ink);
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        // The three settings as they stand, under the sample.
+        let mut y = win.y + win.h + 20.0;
+        let rows = [
+            (p("高对比度", "High contrast"), if contrast { p("开", "On") } else { p("关", "Off") }),
+            (p("文字大小", "Text size"), format!("{}%", (scale * 100.0).round() as u32)),
+            (p("光标大小", "Pointer size"), format!("{cursor}")),
+        ];
+        for (i, (name, value)) in rows.iter().enumerate() {
+            if i > 0 {
+                fill(frame, palette.rule, inner.x, y, inner.w, 1.0, 0.0);
+            }
+            text_centred(frame, name, Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y + 15.0, inner.w - 90.0, Align::Start);
+            text_centred(frame, value, Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x + inner.w - 90.0, y + 15.0, 90.0, Align::End);
+            y += 30.0;
+        }
+    }
+
     /// Wallpaper's preview: a grid of the pictures Windows ships and the themes use; pressing
     /// one puts it on the desktop.
     fn paint_wallpaper_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
@@ -10708,6 +11029,181 @@ impl Ui {
             format!("The taskbar sits {edge}, {sizing}, {alignment}{hiding}")
         };
         text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + margin, screen.y + screen.h + 8.0, area.w - 2.0 * margin, Align::Start);
+    }
+
+    /// The dock page's preview: the desktop the stage shows, with the dock standing on the edge it is told to — its
+    /// own tiles, at the size, spacing, glass and hiding chosen, drawn by the same hand that draws the dock itself.
+    fn paint_dock_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        let dock = self.settings.dock.clone();
+        // (Room for the caption under the screen, which the stage is centred in the space left.)
+        let caption = 24.0;
+        let stage = Rect { x: area.x, y: area.y, w: area.w, h: (area.h - caption).max(0.0) };
+        if stage.w <= 0.0 || stage.h <= 0.0 {
+            return;
+        }
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        let (_, screen) = self.panel_on_stage(frame, stage, None, true, 1.0);
+        stroke_inside(frame, screen, 8.0, palette.card_stroke);
+        if screen.w <= 0.0 || self.stage.size.0 <= 0.0 || !dock.on {
+            return;
+        }
+        // One stage DIP drawn as this many of the window's: the dock is scaled by the same, so it keeps the size it
+        // has against the screen it stands on rather than being drawn large on a small one.
+        let k = screen.w / self.stage.size.0;
+        let (size, spacing) = dock.measures();
+        let side = (size * k * self.scale).round().max(0.0) as u32;
+        // Its tiles as the dock makes them: what is kept, Glance's doors, the Bin, and the room between.
+        let mut entries: Vec<super::dock::Entry> = Vec::new();
+        for item in &dock.items {
+            let (act, name, picture) = match item {
+                crate::settings::DockItem::Keep { target, name } => (super::dock::Act::Launch(target.clone()), name.clone(), crate::dock::pictured(target, side.clamp(16, 256))),
+                crate::settings::DockItem::Door { door } => (super::dock::Act::Door(*door), super::dock::door_says(*door, lang).to_string(), None),
+                crate::settings::DockItem::Trash => (super::dock::Act::Trash, super::dock::trash_says(lang).to_string(), None),
+                crate::settings::DockItem::Gap => (super::dock::Act::Gap, String::new(), None),
+            };
+            entries.push(super::dock::Entry { act, name, picture, running: false });
+        }
+        let row = super::dock::row(&entries, None, size, spacing, dock.peak());
+        let glass = super::overlay::Glass { presence: 1.0 - dock.clear.clamp(0.0, 1.0), ..super::overlay::glass(&mut [], None).0 };
+        // Where its glass stands on the stage, as `Dock::glass_at` puts it: inset from the edge it is on, slid along
+        // that edge as a drag left it; hidden, it is pushed back out of the edge till only its tiles are left.
+        let inset = super::dock::INSET;
+        let at_top = dock.edge == DockEdge::Top;
+        let room = (self.stage.size.0 - 2.0 * inset - row.length).max(0.0);
+        let x = inset + room * dock.along.clamp(0.0, 1.0);
+        let y = if at_top { inset } else { self.stage.size.1 - inset - row.thickness };
+        let away = if dock.auto_hide {
+            (inset + row.thickness + super::dock::overhang(size, dock.peak()).1) * 0.66
+        } else {
+            0.0
+        };
+        let y = if at_top { y - away } else { y + away };
+        // Drawn in the dock's own DIPs, scaled onto the screen and clipped by it: what is pushed past an edge goes
+        // out of the screen there, as it does on the real one.
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(screen.x, screen.y, screen.w, screen.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let mut parent = Matrix3x2::default();
+        unsafe { frame.dc.GetTransform(&mut parent) };
+        let placed = Matrix3x2::translation(x, y) * Matrix3x2::scale(k, k) * Matrix3x2::translation(screen.x, screen.y) * parent;
+        unsafe {
+            frame.dc.SetTransform(&placed);
+            super::dock::shadow(frame, &row, glass, false);
+            super::dock::paint(frame, &entries, &row, glass, size, at_top, None, false, self.scale * k);
+            frame.dc.SetTransform(&parent);
+            frame.dc.PopAxisAlignedClip();
+        }
+        // The caption: what the dock is set to, spelled out.
+        let edge = match dock.edge {
+            DockEdge::Top => p("屏幕顶部", "along the top"),
+            DockEdge::Bottom => p("屏幕底部", "along the bottom"),
+        };
+        let swell = if dock.magnify {
+            format!("{} {}×", p("悬停放大到", "swells to"), dock.peak())
+        } else {
+            p("不悬停放大", "no swell")
+        };
+        let mut bits = vec![edge, p("图标", "icons") + &format!(" {}", size.round() as i32), p("间距", "spacing") + &format!(" {}", spacing.round() as i32), swell];
+        if dock.clear > 0.0 {
+            bits.push(format!("{} {:.0}%", p("玻璃透明", "glass clear"), dock.clear * 100.0));
+        }
+        if dock.auto_hide {
+            bits.push(p("自动隐藏", "hidden until reached"));
+        }
+        let line = bits.join(" · ");
+        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
+    }
+
+    /// The launchpad page's preview: the desktop the stage shows washed as the launchpad washes it, and its tiles laid
+    /// in the grid the settings ask for — drawn by the same hand that draws the launchpad, on the programs the shell
+    /// has been found to list (see `super::launchpad`).
+    fn paint_launchpad_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        // (Room for the caption under the screen, which the stage is centred in the space left.)
+        let caption = 24.0;
+        let stage = Rect { x: area.x, y: area.y, w: area.w, h: (area.h - caption).max(0.0) };
+        if stage.w <= 0.0 || stage.h <= 0.0 {
+            return;
+        }
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        let (_, screen) = self.panel_on_stage(frame, stage, None, true, 1.0);
+        stroke_inside(frame, screen, 8.0, palette.card_stroke);
+        if screen.w <= 0.0 || self.stage.size.0 <= 0.0 {
+            return;
+        }
+        // One stage DIP drawn as this many of the window's: the page is laid in the stage's own DIPs and scaled onto
+        // the screen it stands on, so its tiles keep the room they have against a screen of their own.
+        let k = screen.w / self.stage.size.0;
+        let (wide, tall) = self.stage.size;
+        // The programs the Start menu lists, read on a thread of their own: asked for while they are still coming,
+        // and the page drawn again when they land.
+        let Some(all) = crate::station::found::all() else {
+            crate::station::found::look(|| {});
+            self.next_frame = Instant::now() + Duration::from_millis(1500);
+            return;
+        };
+        let dock = self.settings.dock.clone();
+        let stood = |target: &str| {
+            dock.items
+                .iter()
+                .any(|one| matches!(one, crate::settings::DockItem::Keep { target: here, .. } if crate::station::apps::same(here, target)))
+        };
+        let grid = super::launchpad::Grid::asked(wide, tall, all.len(), dock.pad_cols, dock.pad_rows);
+        let side = (grid.side * k * self.scale).round().max(0.0) as u32;
+        // The first page of them, as the launchpad makes its tiles: the shell's picture where it has given one, the
+        // name's first letter till it does — which is asked for again a moment later.
+        let mut tiles: Vec<super::launchpad::Tile> = Vec::new();
+        let mut waiting = false;
+        for one in all.iter().take(grid.per.min(all.len())) {
+            let picture = crate::dock::plated(&one.target, side.clamp(16, 256));
+            waiting |= picture.is_none();
+            tiles.push(super::launchpad::Tile {
+                name: one.name.clone(),
+                target: one.target.clone(),
+                picture,
+                kept: stood(&one.target),
+                group: Vec::new(),
+            });
+        }
+        if waiting {
+            self.next_frame = Instant::now() + Duration::from_millis(400);
+        }
+        // Drawn inside the screen: washed over it, its search's place at the head, its page of tiles, the pages' dots
+        // at their feet — what is pushed past a screen edge goes out of it there, as it does on the real one.
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(screen.x, screen.y, screen.w, screen.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let mut parent = Matrix3x2::default();
+        unsafe { frame.dc.GetTransform(&mut parent) };
+        let placed = Matrix3x2::scale(k, k) * Matrix3x2::translation(screen.x, screen.y) * parent;
+        unsafe { frame.dc.SetTransform(&placed) };
+        let wash = if self.dark {
+            Color::hex(0x0A0D12, 0.72)
+        } else {
+            Color::hex(0xEAEFF6, 0.72)
+        };
+        frame.fill(wash, 0.0, 0.0, wide, tall);
+        // (The search's box: only its place shown, since nothing is written here.)
+        let (bx, by, bw, bh) = super::launchpad::field(wide);
+        Canvas::fill_rounded(frame, Color::hex(if self.dark { 0xFFFFFF } else { 0x1C1C1C }, 0.1), bx, by, bw, bh, bh / 2.0);
+        super::launchpad::paint(frame, &tiles, &grid, 0, tiles.len(), super::launchpad::Hand { come: 1.0, ..Default::default() }, self.dark);
+        super::launchpad::dots(frame, grid.pages(all.len()), 0, wide, super::launchpad::feet(tall), self.dark);
+        unsafe {
+            frame.dc.SetTransform(&parent);
+            frame.dc.PopAxisAlignedClip();
+        }
+        // The caption: how the page lies, and how many pages the programs make in it.
+        let lying = if dock.pad_cols == 0 || dock.pad_rows == 0 {
+            p("按屏幕自定", "laid for the screen")
+        } else {
+            format!("{} × {}", grid.cols, grid.rows)
+        };
+        let pages = grid.pages(all.len());
+        let line = if pages > 1 {
+            format!("{} {} · {} · {} {}", p("每页", "a page"), lying, p("共", "of"), pages, p("页", "pages"))
+        } else {
+            format!("{} {}", p("一页排满", "one page holds"), lying)
+        };
+        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
     }
 
     /// How the stage is shown in `area` with a panel `pw` wide (stage DIPs) slid out from `edge`: how large a stage

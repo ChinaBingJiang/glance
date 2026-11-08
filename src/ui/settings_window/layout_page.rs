@@ -18,6 +18,9 @@ const TILE: f32 = TILE_PAD + TILE_PICTURE + 8.0 + 40.0 + TILE_PAD;
 const TILE_GAP: f32 = 12.0;
 const TILE_PICTURE: f32 = 88.0;
 const TILE_PAD: f32 = 12.0;
+/// The least room a tile may be given: what does not fit its row at this width is laid on a
+/// row of its own (see `library_grid`).
+const TILE_MIN: f32 = 108.0;
 /// What plays, drawn as its strip at the least a music widget is wide, made smaller into its picture; the room round
 /// each component in its picture.
 const TILE_MUSIC: (f32, f32) = (240.0, 72.0);
@@ -86,12 +89,29 @@ pub(super) fn part_icon(part: Part) -> Icon {
     }
 }
 
+/// The two doors that stand always on, apart from the edge components: the dock's row of icons and the
+/// launchpad's page. Not dragged anywhere — their tile turns to their page instead.
+const DOORS: [(Icon, &str, &str, Page); 2] = [
+    (Icon::ArrowDownToLine, "Dock", "Dock", Page::Dock),
+    (Icon::Grid3x3, "启动台", "Launchpad", Page::Launchpad),
+];
+
+/// How the library lays its tiles in `room`: how many side by side, how wide each, and how many
+/// rows the components and the doors together make — as many as fit a row at `TILE_MIN`.
+fn library_grid(room: f32) -> (usize, f32, usize) {
+    let count = PARTS.len() + DOORS.len();
+    let per = (((room + TILE_GAP) / (TILE_MIN + TILE_GAP)).floor() as usize).clamp(1, count);
+    let wide = (room - TILE_GAP * (per - 1) as f32) / per as f32;
+    (per, wide, count.div_ceil(per))
+}
+
 impl Ui {
-    /// The library row's height: its words, then the components' tiles side by side.
+    /// The library row's height: its words, then the components' tiles, side by side and in rows.
     pub(super) fn library_height(&self) -> f32 {
         let (_, word) = self.library_words();
         let room = self.cards() - 2.0 * ROW_SIDE;
-        22.0 + self.gfx.wrapped_height(word, Font::new(Family::Segoe, HINT, 400.0), room) + 14.0 + TILE + ROW_SIDE
+        let (_, _, rows) = library_grid(room);
+        22.0 + self.gfx.wrapped_height(word, Font::new(Family::Segoe, HINT, 400.0), room) + 14.0 + rows as f32 * TILE + (rows as f32 - 1.0) * TILE_GAP + ROW_SIDE
     }
 
     fn library_words(&self) -> (&'static str, &'static str) {
@@ -99,8 +119,8 @@ impl Ui {
             pick(self.lang, "组件", "Components"),
             pick(
                 self.lang,
-                "将组件拖到右侧屏幕的边缘，即可从该边缘呼出。每条边缘放置一个组件，同一组件可放在多条边缘。拖到已有组件的边缘将替换原组件，在两条边缘之间拖动则互换位置",
-                "Drag a component onto a screen's edge on the right to open it from there. Each edge holds one, and a component can be on several. Dropped on an edge that holds one, it replaces it. Dragged between two edges, the two change places",
+                "将组件拖到右侧屏幕的边缘，即可从该边缘呼出。每条边缘放置一个组件，同一组件可放在多条边缘。拖到已有组件的边缘将替换原组件，在两条边缘之间拖动则互换位置。Dock 与启动台常驻显示，点击其磁贴可到它们的设置页",
+                "Drag a component onto a screen's edge on the right to open it from there. Each edge holds one, and a component can be on several. Dropped on an edge that holds one, it replaces it. Dragged between two edges, the two change places. The Dock and the Launchpad stand always on: click their tile to open their page",
             ),
         )
     }
@@ -117,9 +137,11 @@ impl Ui {
         let room = width - 2.0 * ROW_SIDE;
         let head = 22.0 + self.gfx.wrapped_height(word, hint, room) + 14.0;
         field_label(frame, palette, name, Some(word), label, hint, left + ROW_SIDE, y + head / 2.0, room);
-        let wide = (room - TILE_GAP * (PARTS.len() - 1) as f32) / PARTS.len() as f32;
+        // The tiles, as many to a row as the room holds at their least width; the last row may be short.
+        let (per, wide, _) = library_grid(room);
+        let place = |index: usize| Rect { x: left + ROW_SIDE + (index % per) as f32 * (wide + TILE_GAP), y: y + head + (index / per) as f32 * (TILE + TILE_GAP), w: wide, h: TILE };
         for (index, part) in PARTS.into_iter().enumerate() {
-            let r = Rect { x: left + ROW_SIDE + index as f32 * (wide + TILE_GAP), y: y + head, w: wide, h: TILE };
+            let r = place(index);
             let target = Target::Library(part);
             let carried = self.carry.as_ref().is_some_and(|carry| carry.moved && carry.part == part && carry.from.is_none());
             fill(frame, if hovered.as_ref() == Some(&target) || carried { palette.control_on } else { palette.control }, r.x, r.y, r.w, r.h, 8.0);
@@ -170,6 +192,28 @@ impl Ui {
             let below = picture.y + picture.h + 8.0;
             text_centred(frame, part_name(part, self.lang), Font::new(Family::Segoe, 13.5, 600.0), palette.text, r.x + TILE_PAD + 2.0, below + 10.0, r.w - 2.0 * TILE_PAD, Align::Start);
             text_centred(frame, part_word(part, self.lang), hint, palette.text2, r.x + TILE_PAD + 2.0, below + 30.0, r.w - 2.0 * TILE_PAD, Align::Start);
+            self.targets.push((r, target));
+        }
+        for (index, (icon, zh, en, page)) in DOORS.into_iter().enumerate() {
+            let r = place(PARTS.len() + index);
+            let target = Target::Nav(page);
+            fill(frame, if hovered.as_ref() == Some(&target) { palette.control_on } else { palette.control }, r.x, r.y, r.w, r.h, 8.0);
+            stroke_inside(frame, r, 8.0, palette.card_stroke);
+            // No picture of the desktop in these: what they show lives on the screen itself, so the tile carries
+            // their mark — the page's own icon in a disc — over the room a picture would have taken.
+            let picture = Rect { x: r.x + TILE_PAD, y: r.y + TILE_PAD, w: r.w - 2.0 * TILE_PAD, h: TILE_PICTURE };
+            let (cx, cy) = (picture.x + picture.w / 2.0, picture.y + picture.h / 2.0);
+            fill(frame, palette.switch_off, cx - 26.0, cy - 26.0, 52.0, 52.0, 26.0);
+            frame.icon(icon, Point { x: cx, y: cy }, 26.0, palette.text);
+            let below = picture.y + picture.h + 8.0;
+            let name = pick(self.lang, zh, en);
+            let word = if page == Page::Dock {
+                pick(self.lang, "常驻的图标排", "A standing row")
+            } else {
+                pick(self.lang, "常驻的应用页", "A standing page")
+            };
+            text_centred(frame, name, Font::new(Family::Segoe, 13.5, 600.0), palette.text, r.x + TILE_PAD + 2.0, below + 10.0, r.w - 2.0 * TILE_PAD, Align::Start);
+            text_centred(frame, word, hint, palette.text2, r.x + TILE_PAD + 2.0, below + 30.0, r.w - 2.0 * TILE_PAD, Align::Start);
             self.targets.push((r, target));
         }
     }

@@ -123,22 +123,67 @@ pub fn current(device: &str) -> Option<Mode> {
 
 /// Tells a display to wear a mode, and keeps the change in the registry as
 /// Windows' own panel does: true when it took. A mode the driver will not draw
-/// is refused, and the display is left as it was.
+/// is refused, and the display is left as it was — so the rate is not forced:
+/// the size is asked for at the rate given, then at every rate the driver lists
+/// for that size, and at last with the rate left to the driver itself.
 pub fn set_mode(device: &str, mode: Mode) -> bool {
     if device.is_empty() {
         return false;
     }
     let name = named(device);
+    if wearing(&name, mode) {
+        return true;
+    }
+    for hz in rates_of(&name, mode.wide, mode.tall) {
+        if hz != mode.hz && wearing(&name, Mode { hz, ..mode }) {
+            return true;
+        }
+    }
+    wearing_plain(&name, mode.wide, mode.tall)
+}
+
+/// The rates one size of a display is listed at, fastest first and each but once.
+fn rates_of(name: &[u16], wide: u32, tall: u32) -> Vec<u32> {
+    let mut held: Vec<u32> = Vec::new();
+    let mut index = 0u32;
+    loop {
+        let mut dm = DEVMODEW::default();
+        dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if index >= 512
+            || !(unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_DISPLAY_SETTINGS_MODE(index), &mut dm) })
+                .as_bool()
+        {
+            break;
+        }
+        if dm.dmPelsWidth == wide && dm.dmPelsHeight == tall && !held.contains(&dm.dmDisplayFrequency) {
+            held.push(dm.dmDisplayFrequency);
+        }
+        index += 1;
+    }
+    held.sort_unstable_by(|a, b| b.cmp(a));
+    held
+}
+
+/// The size at its rate, put to the driver; true when it drew it.
+fn wearing(name: &[u16], mode: Mode) -> bool {
     let mut dm = DEVMODEW::default();
     dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
     dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
     dm.dmPelsWidth = mode.wide;
     dm.dmPelsHeight = mode.tall;
     dm.dmDisplayFrequency = mode.hz;
-    let took = unsafe {
-        ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm as *const _), None, CDS_UPDATEREGISTRY, None)
-    };
-    took == DISP_CHANGE_SUCCESSFUL
+    (unsafe { ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm as *const _), None, CDS_UPDATEREGISTRY, None) }) == DISP_CHANGE_SUCCESSFUL
+}
+
+/// The size with the rate left to the driver: the last asking, where every listed
+/// rate was refused.
+fn wearing_plain(name: &[u16], wide: u32, tall: u32) -> bool {
+    let mut dm = DEVMODEW::default();
+    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    dm.dmPelsWidth = wide;
+    dm.dmPelsHeight = tall;
+    (unsafe { ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm as *const _), None, CDS_UPDATEREGISTRY, None) }) == DISP_CHANGE_SUCCESSFUL
 }
 
 /// A word read from under the user, where one is kept.

@@ -13,7 +13,7 @@ use windows::Win32::System::Power::{
 };
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetValueExW, HKEY,
-    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
     RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
 use windows::Win32::System::SystemInformation::{GetProductInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, OSVERSIONINFOW, OS_PRODUCT_TYPE};
@@ -106,6 +106,26 @@ pub(crate) fn reg_write_sz(key: &str, value: &str, data: &str) {
         .chain([0])
         .flat_map(|unit| unit.to_le_bytes())
         .collect();
+    reg_write_raw(key, value, REG_SZ, &wide);
+}
+
+/// A list written to the registry, under the user: the words run one after another with a
+/// blank between them, the whole ended by a second blank — which is how the registry keeps
+/// a multi-string.
+fn reg_write_multi(key: &str, value: &str, words: &[String]) {
+    let mut wide: Vec<u8> = Vec::new();
+    for word in words {
+        for unit in word.encode_utf16().chain([0]) {
+            wide.extend(unit.to_le_bytes());
+        }
+    }
+    wide.extend([0, 0]);
+    reg_write_raw(key, value, REG_MULTI_SZ, &wide);
+}
+
+/// A value written to the registry, under the user, in whatever shape it is given: the key
+/// made if it is not there.
+fn reg_write_raw(key: &str, value: &str, kind: REG_VALUE_TYPE, data: &[u8]) {
     unsafe {
         let mut hkey = HKEY::default();
         let open = RegCreateKeyExW(
@@ -120,7 +140,7 @@ pub(crate) fn reg_write_sz(key: &str, value: &str, data: &str) {
             None,
         );
         if open.is_ok() {
-            let _ = RegSetValueExW(hkey, &HSTRING::from(value), None, REG_SZ, Some(&wide));
+            let _ = RegSetValueExW(hkey, &HSTRING::from(value), None, kind, Some(data));
             let _ = RegCloseKey(hkey);
         }
     }
@@ -368,16 +388,7 @@ pub(crate) fn theme_name(file: &std::path::Path) -> String {
     let Ok(bytes) = std::fs::read(file) else {
         return String::new();
     };
-    let written = if bytes.starts_with(&[0xff, 0xfe]) {
-        String::from_utf16_lossy(
-            &bytes[2..]
-                .chunks_exact(2)
-                .map(|two| u16::from_le_bytes([two[0], two[1]]))
-                .collect::<Vec<u16>>(),
-        )
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+    let written = theme_text(&bytes);
     let mut in_theme = false;
     for line in written.lines() {
         let line = line.trim();
@@ -392,10 +403,10 @@ pub(crate) fn theme_name(file: &std::path::Path) -> String {
             continue;
         };
         if said.starts_with('@') {
-            if let Some(word) = from_dll(said) {
+            if let Some(word) = from_dll(said).filter(|word| legible(word)) {
                 return word;
             }
-        } else if !said.is_empty() {
+        } else if legible(said) {
             return said.to_string();
         }
     }
@@ -403,21 +414,48 @@ pub(crate) fn theme_name(file: &std::path::Path) -> String {
         .map_or(String::new(), |stem| stem.to_string_lossy().into_owned())
 }
 
+/// Whether a name read off a file is words rather than the marks a wrong decoding leaves: the
+/// replacement character and the control codes say the bytes were read in the wrong encoding.
+fn legible(word: &str) -> bool {
+    !word.is_empty() && !word.chars().any(|letter| letter == char::REPLACEMENT_CHARACTER || letter.is_control())
+}
+
+/// A theme file's bytes as text. Windows writes these files three ways: plain ASCII, UTF-16 with a
+/// byte mark, and — for the themes made on the machine, whose names are in the user's own language
+/// — the system's ANSI code page, which is not UTF-8 and must not be read as if it were.
+fn theme_text(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return String::from_utf16_lossy(
+            &bytes[2..]
+                .chunks_exact(2)
+                .map(|two| u16::from_le_bytes([two[0], two[1]]))
+                .collect::<Vec<u16>>(),
+        );
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => in_code_page(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned()),
+    }
+}
+
+/// `bytes` read in the system's own code page, where they are words in it.
+fn in_code_page(bytes: &[u8]) -> Option<String> {
+    use windows::Win32::Globalization::{MultiByteToWideChar, CP_ACP, MB_ERR_INVALID_CHARS};
+    let length = unsafe { MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, bytes, None) };
+    if length <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; length as usize];
+    let written = unsafe { MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, bytes, Some(&mut wide)) };
+    (written > 0).then(|| String::from_utf16_lossy(&wide[..written as usize]))
+}
+
 /// The wallpaper path a theme file declares: `Wallpaper` under `[WallPaper]` — or, as Windows
 /// 11 writes its own themes, under `[Control Panel\Desktop]` — with environment variables
 /// expanded. None where the theme has no wallpaper or the file cannot be read.
 pub(crate) fn theme_wallpaper(file: &str) -> Option<String> {
     let bytes = std::fs::read(file).ok()?;
-    let written = if bytes.starts_with(&[0xff, 0xfe]) {
-        String::from_utf16_lossy(
-            &bytes[2..]
-                .chunks_exact(2)
-                .map(|two| u16::from_le_bytes([two[0], two[1]]))
-                .collect::<Vec<u16>>(),
-        )
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+    let written = theme_text(&bytes);
     let mut in_wallpaper = false;
     for line in written.lines() {
         let line = line.trim();
@@ -530,13 +568,244 @@ pub(crate) fn toggle_seconds() {
     broadcast_settings("SubSystems");
 }
 
-pub(crate) fn toggle_clock24() {
-    let now = clock_24();
-    reg_write_sz(
-        r"Control Panel\International",
-        "sTimeFormat",
-        if now { "h:mm:ss tt" } else { "HH:mm:ss" },
-    );
+/// Puts one of the locale's own patterns on the desktop.
+///
+/// The registry alone is only half the change: Windows keeps the locale in memory once the
+/// session starts, so writing `Control Panel\International` and sending `intl` round the
+/// desktop leaves the taskbar and every running window at the shape they had. The locale call
+/// writes the value and tells them in one step; the registry is written direct only where the
+/// call is refused.
+fn set_locale(kind: u32, value: &str, pattern: &str) {
+    use windows::Win32::Globalization::{SetLocaleInfoW, LOCALE_USER_DEFAULT};
+    let word: Vec<u16> = pattern.encode_utf16().chain([0]).collect();
+    if unsafe { SetLocaleInfoW(LOCALE_USER_DEFAULT, kind, PCWSTR(word.as_ptr())) }.is_err() {
+        reg_write_sz(r"Control Panel\International", value, pattern);
+    }
+    broadcast_settings("intl");
+}
+
+/// Puts the clock on the 24 hours, or on the twelve with which half of the day after them.
+pub(crate) fn set_clock_24(on: bool) {
+    use windows::Win32::Globalization::LOCALE_STIMEFORMAT;
+    set_locale(LOCALE_STIMEFORMAT, "sTimeFormat", if on { "HH:mm:ss" } else { "h:mm:ss tt" });
+}
+
+/// Puts another short date pattern on the desktop ("yyyy/M/d" and the like).
+pub(crate) fn set_short_date(pattern: &str) {
+    use windows::Win32::Globalization::LOCALE_SSHORTDATE;
+    set_locale(LOCALE_SSHORTDATE, "sShortDate", pattern);
+}
+
+/// Puts another long date pattern on the desktop, the one that carries the weekday too.
+pub(crate) fn set_long_date(pattern: &str) {
+    use windows::Win32::Globalization::LOCALE_SLONGDATE;
+    set_locale(LOCALE_SLONGDATE, "sLongDate", pattern);
+}
+
+/// The shapes a clock and a number are worn in, as the locale of the machine keeps them.
+/// Chosen from those the machine's own tongue carries, so the shapes are always ones it
+/// has the data for.
+const TIME_PATTERNS: [&str; 5] = ["HH:mm:ss", "HH:mm", "h:mm:ss tt", "h:mm tt", "H:mm:ss"];
+
+pub(crate) fn time_patterns() -> &'static [&'static str] {
+    &TIME_PATTERNS
+}
+
+/// Which of the shapes the clock wears now; none where it wears one not offered here.
+pub(crate) fn current_time_pattern() -> Option<usize> {
+    TIME_PATTERNS.iter().position(|pattern| pattern.eq_ignore_ascii_case(&time_format()))
+}
+
+/// Puts another shape on the clock, to the minute or to the second, on the twenty-four
+/// hours or the twelve.
+pub(crate) fn set_time_pattern(pattern: &str) {
+    use windows::Win32::Globalization::LOCALE_STIMEFORMAT;
+    set_locale(LOCALE_STIMEFORMAT, "sTimeFormat", pattern);
+}
+
+// ---- Regional format ----
+
+/// The parts a regional format is made of: every shape the locale has of its own, with
+/// the name the registry keeps it under. (All of them stand there as strings, the
+/// numbers no less, which is why one writer serves the whole list.)
+const FORMATS: [(u32, &str); 36] = [
+    (windows::Win32::Globalization::LOCALE_SCOUNTRY, "sCountry"),
+    (windows::Win32::Globalization::LOCALE_ICOUNTRY, "iCountry"),
+    (windows::Win32::Globalization::LOCALE_ICALENDARTYPE, "iCalendarType"),
+    (windows::Win32::Globalization::LOCALE_IMEASURE, "iMeasure"),
+    (windows::Win32::Globalization::LOCALE_IPAPERSIZE, "iPaperSize"),
+    (windows::Win32::Globalization::LOCALE_SLIST, "sList"),
+    (windows::Win32::Globalization::LOCALE_SDECIMAL, "sDecimal"),
+    (windows::Win32::Globalization::LOCALE_STHOUSAND, "sThousand"),
+    (windows::Win32::Globalization::LOCALE_SGROUPING, "sGrouping"),
+    (windows::Win32::Globalization::LOCALE_IDIGITS, "iDigits"),
+    (windows::Win32::Globalization::LOCALE_ILZERO, "iLZero"),
+    (windows::Win32::Globalization::LOCALE_INEGNUMBER, "iNegNumber"),
+    (windows::Win32::Globalization::LOCALE_SNATIVEDIGITS, "sNativeDigits"),
+    (windows::Win32::Globalization::LOCALE_SCURRENCY, "sCurrency"),
+    (windows::Win32::Globalization::LOCALE_SMONDECIMALSEP, "sMonDecimalSep"),
+    (windows::Win32::Globalization::LOCALE_SMONTHOUSANDSEP, "sMonThousandSep"),
+    (windows::Win32::Globalization::LOCALE_SMONGROUPING, "sMonGrouping"),
+    (windows::Win32::Globalization::LOCALE_ICURRDIGITS, "iCurrDigits"),
+    (windows::Win32::Globalization::LOCALE_ICURRENCY, "iCurrency"),
+    (windows::Win32::Globalization::LOCALE_INEGCURR, "iNegCurr"),
+    (windows::Win32::Globalization::LOCALE_SPOSITIVESIGN, "sPositiveSign"),
+    (windows::Win32::Globalization::LOCALE_SNEGATIVESIGN, "sNegativeSign"),
+    (windows::Win32::Globalization::LOCALE_SDATE, "sDate"),
+    (windows::Win32::Globalization::LOCALE_IDATE, "iDate"),
+    (windows::Win32::Globalization::LOCALE_SSHORTDATE, "sShortDate"),
+    (windows::Win32::Globalization::LOCALE_SLONGDATE, "sLongDate"),
+    (windows::Win32::Globalization::LOCALE_SYEARMONTH, "sYearMonth"),
+    (windows::Win32::Globalization::LOCALE_STIME, "sTime"),
+    (windows::Win32::Globalization::LOCALE_ITIME, "iTime"),
+    (windows::Win32::Globalization::LOCALE_ITLZERO, "iTLZero"),
+    (windows::Win32::Globalization::LOCALE_STIMEFORMAT, "sTimeFormat"),
+    (windows::Win32::Globalization::LOCALE_SSHORTTIME, "sShortTime"),
+    (windows::Win32::Globalization::LOCALE_S1159, "s1159"),
+    (windows::Win32::Globalization::LOCALE_S2359, "s2359"),
+    (windows::Win32::Globalization::LOCALE_IFIRSTDAYOFWEEK, "iFirstDayOfWeek"),
+    (windows::Win32::Globalization::LOCALE_IFIRSTWEEKOFYEAR, "iFirstWeekOfYear"),
+];
+
+/// One locale's own reading of one shape, as the string the registry keeps it in.
+fn locale_said(tag: &str, kind: u32) -> Option<String> {
+    use windows::Win32::Globalization::GetLocaleInfoEx;
+    let name: Vec<u16> = tag.encode_utf16().chain([0]).collect();
+    let mut buffer = [0u16; 128];
+    let got = unsafe { GetLocaleInfoEx(PCWSTR(name.as_ptr()), kind, Some(&mut buffer)) };
+    if got <= 0 {
+        return None;
+    }
+    let said = String::from_utf16_lossy(&buffer[..(got as usize).min(buffer.len())]);
+    Some(said.trim_end_matches('\0').to_string())
+}
+
+/// The regional formats the machine may wear: the locale of every language pack it
+/// carries, and the one it wears now where that is not among them.
+pub(crate) fn regional_formats() -> Vec<String> {
+    let mut tags = ui_languages();
+    let now = locale_name();
+    if !now.is_empty() && !tags.iter().any(|tag| tag.eq_ignore_ascii_case(&now)) {
+        tags.push(now);
+    }
+    tags
+}
+
+/// A regional format's name in the tongue the machine is worn in (“中文(中国)”).
+pub(crate) fn format_name(tag: &str) -> String {
+    locale_said(tag, windows::Win32::Globalization::LOCALE_SLOCALIZEDDISPLAYNAME).unwrap_or_else(|| tag.to_string())
+}
+
+/// Which of the formats the machine wears now.
+pub(crate) fn current_format() -> Option<usize> {
+    let now = locale_name();
+    regional_formats().iter().position(|tag| tag.eq_ignore_ascii_case(&now))
+}
+
+/// Wears another regional format. There is no call that does the whole of it, so the
+/// shapes are copied from the locale itself the way the shell's own page does it: the
+/// numbers and the money, the calendar and the week's first day, the dates and the clock.
+/// Left out of one copy and the formats are a mix of two locales, which is what shows as
+/// a half-changed machine.
+pub(crate) fn set_regional_format(tag: &str) {
+    for (kind, value) in FORMATS {
+        if let Some(said) = locale_said(tag, kind) {
+            reg_write_sz(r"Control Panel\International", value, &said);
+        }
+    }
+    let name: Vec<u16> = tag.encode_utf16().chain([0]).collect();
+    let lcid = unsafe { windows::Win32::Globalization::LocaleNameToLCID(PCWSTR(name.as_ptr()), 0) };
+    if lcid != 0 {
+        reg_write_sz(r"Control Panel\International", "Locale", &format!("{lcid:08X}"));
+    }
+    reg_write_sz(r"Control Panel\International", "LocaleName", tag);
+    broadcast_settings("intl");
+}
+
+// ---- Country or region ----
+
+/// The countries Windows knows, each by its number, the name it shows in the machine's
+/// own tongue and its two letters. Kept once: the telling is two calls apiece over the
+/// whole list, and the preview asks every frame.
+pub(crate) fn countries() -> &'static [(i32, String, String)] {
+    static KEPT: std::sync::OnceLock<Vec<(i32, String, String)>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(|| {
+        use windows::Win32::Globalization::{GetGeoInfoW, GEO_FRIENDLYNAME, GEO_ISO2};
+        let said = |id: i32, kind: windows::Win32::Globalization::SYSGEOTYPE| {
+            let mut buffer = [0u16; 128];
+            let got = unsafe { GetGeoInfoW(id, kind, Some(&mut buffer), 0) };
+            if got <= 0 {
+                return String::new();
+            }
+            String::from_utf16_lossy(&buffer[..(got as usize).min(buffer.len())]).trim_end_matches('\0').to_string()
+        };
+        let mut list: Vec<(i32, String, String)> = (0..512i32)
+            .filter_map(|id| {
+                let code = said(id, GEO_ISO2);
+                (!code.is_empty()).then(|| (id, said(id, GEO_FRIENDLYNAME), code))
+            })
+            .collect();
+        list.sort_by(|a, b| a.1.cmp(&b.1));
+        list
+    })
+}
+
+/// Which of the countries the machine stands in.
+pub(crate) fn current_country() -> Option<usize> {
+    use windows::Win32::Globalization::{GetUserGeoID, GEOCLASS_NATION};
+    let now = unsafe { GetUserGeoID(GEOCLASS_NATION) };
+    countries().iter().position(|(id, ..)| *id == now)
+}
+
+/// Moves the machine to another country: the number Windows keeps for it, and the two
+/// letters the shell reads beside it. What the country holds is the sending of goods and
+/// the apps' own notions, so it is written and told round, not applied here and now.
+pub(crate) fn set_country(id: i32, code: &str) {
+    use windows::Win32::Globalization::SetUserGeoID;
+    if unsafe { SetUserGeoID(id) }.is_err() {
+        reg_write(r"Control Panel\International\Geo", "Nation", id as u32);
+    }
+    reg_write_sz(r"Control Panel\International\Geo", "Name", code);
+    broadcast_settings("intl");
+}
+
+// ---- Time zone's other half: the move ----
+
+/// The zones the machine knows, each by its Windows name and the line the shell shows
+/// under it. Kept once, as the countries are: it is a hundred and forty four keys.
+pub(crate) fn zone_choices() -> &'static [(String, String)] {
+    static KEPT: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(|| {
+        let root = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Time Zones";
+        let mut list: Vec<(String, String)> = reg_subkeys(HKEY_LOCAL_MACHINE, root)
+            .into_iter()
+            .map(|id| {
+                let said = reg_sz(HKEY_LOCAL_MACHINE, &format!(r"{root}\{id}"), "Display");
+                (id, said)
+            })
+            .collect();
+        list.sort_by(|a, b| a.1.cmp(&b.1));
+        list
+    })
+}
+
+/// Which of the zones the clock stands in.
+pub(crate) fn current_zone_at() -> Option<usize> {
+    let now = current_zone();
+    zone_choices().iter().position(|(id, _)| id.eq_ignore_ascii_case(&now))
+}
+
+/// Moves the clock to another zone. The call for it wants a privilege a normal session
+/// does not hold, so the tool the shell's own page runs is run here instead: it asks for
+/// the same thing and gets it, and it sets the daylights' dates with the shift.
+pub(crate) fn set_zone(id: &str) {
+    use std::os::windows::process::CommandExt;
+    let went = std::process::Command::new("tzutil").args(["/s", id]).creation_flags(0x0800_0000).status();
+    crate::journal::note(match went {
+        Ok(done) if done.success() => format!("settings: the clock moved to {id}"),
+        Ok(done) => format!("settings: the clock could not move to {id} (the tool came back {done})"),
+        Err(why) => format!("settings: the clock could not move to {id}: {why}"),
+    });
     broadcast_settings("intl");
 }
 
@@ -1033,6 +1302,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 const STUCK_RECTS: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3";
 
+/// The section Explorer tells the taskbar to read again. A write to the registry is only half a
+/// change: without this word round the desktop Explorer keeps the bar as it drew it last.
+const TRAY: &str = "TraySettings";
+
 /// One byte of StuckRects3: its 12th tells the edge the taskbar stands on, its 16th carries the
 /// state bits (auto-hide among them) — the two must not be read or written as one.
 fn taskbar_byte(at: usize) -> u8 {
@@ -1047,7 +1320,7 @@ fn put_taskbar_byte(at: usize, value: u8) {
     }
     data[at] = value;
     reg_write_bytes(STUCK_RECTS, "Settings", &data);
-    broadcast_settings("");
+    broadcast_settings(TRAY);
 }
 
 /// Whether the taskbar hides until the pointer comes: the state byte's second bit, kept apart
@@ -1077,7 +1350,7 @@ pub(crate) fn taskbar_small() -> bool {
 
 pub(crate) fn set_taskbar_small(on: bool) {
     reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarSmallIcons", u32::from(on));
-    broadcast_settings("TaskbarSmallIcons");
+    broadcast_settings(TRAY);
 }
 
 /// How taskbar buttons combine: 0 always, 1 when full, 2 never.
@@ -1087,7 +1360,7 @@ pub(crate) fn combine_icons() -> u32 {
 
 pub(crate) fn set_combine_icons(value: u32) {
     reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarGlomLevel", value.clamp(0, 2));
-    broadcast_settings("TaskbarGlomLevel");
+    broadcast_settings(TRAY);
 }
 
 /// The taskbar's size: Windows' TaskbarSi number, 0 small, 1 medium, 2 large.
@@ -1097,7 +1370,7 @@ pub(crate) fn taskbar_size() -> u32 {
 
 pub(crate) fn set_taskbar_size(value: u32) {
     reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarSi", value.clamp(0, 2));
-    broadcast_settings("TaskbarSi");
+    broadcast_settings(TRAY);
 }
 
 /// Where the taskbar's icons stand: Windows' TaskbarAl number, 0 against the start's corner, 1 in
@@ -1108,7 +1381,7 @@ pub(crate) fn taskbar_align() -> u32 {
 
 pub(crate) fn set_taskbar_align(value: u32) {
     reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarAl", value.clamp(0, 1));
-    broadcast_settings("TaskbarAl");
+    broadcast_settings(TRAY);
 }
 
 // ---- Wallpaper ----
@@ -1410,13 +1683,74 @@ pub(crate) fn time_format() -> String {
 }
 
 /// The languages the display may be worn in, most wanted first; empty where the
-/// machine keeps only the one it was set up with.
+/// machine keeps only the one it was set up with. (The shell writes the list under the name
+/// `Languages`; the older name is read too, for where it is kept there instead.)
 pub(crate) fn preferred_languages() -> Vec<String> {
-    reg_multi(
-        HKEY_CURRENT_USER,
-        r"Control Panel\International\User Profile",
-        "PreferredLanguages",
-    )
+    let kept = reg_multi(HKEY_CURRENT_USER, r"Control Panel\International\User Profile", "Languages");
+    if !kept.is_empty() {
+        return kept;
+    }
+    reg_multi(HKEY_CURRENT_USER, r"Control Panel\International\User Profile", "PreferredLanguages")
+}
+
+/// The language packs the machine carries — the tongues its windows can be worn in. Windows
+/// Settings adds these under 语言; a tongue without its pack cannot be worn whatever is asked.
+pub(crate) fn ui_languages() -> Vec<String> {
+    let mut tags = reg_subkeys(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\MUI\UILanguages");
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+/// Whether a pack's tag and a language the user asked for name the same tongue: Windows calls
+/// the pack `zh-CN` and the language `zh-Hans-CN`, and either may stand on its own.
+fn same_tongue(pack: &str, said: &str) -> bool {
+    let bits = |word: &str| word.to_lowercase().split('-').map(str::to_string).collect::<Vec<String>>();
+    let (a, b) = (bits(pack), bits(said));
+    let primary = |v: &[String]| v.first().cloned().unwrap_or_default();
+    // (A region is two letters; a script is three or four, and is let pass for what it is.)
+    let region = |v: &[String]| v.iter().filter(|bit| bit.len() == 2).last().cloned().unwrap_or_default();
+    primary(&a) == primary(&b) && (region(&a).is_empty() || region(&b).is_empty() || region(&a) == region(&b))
+}
+
+/// Which of the packs the display is worn in now, by its place in `ui_languages`; where the
+/// machine keeps a tongue no pack of this PC answers to.
+pub(crate) fn worn_language() -> Option<usize> {
+    let first = preferred_languages().into_iter().next()?;
+    ui_languages().iter().position(|pack| same_tongue(pack, &first))
+}
+
+/// A tongue's name in the language the machine is worn in; the tag where it is not one of the
+/// few kept here.
+pub(crate) fn language_name(tag: &str, lang: Lang) -> String {
+    let said = match tag {
+        "zh-CN" | "zh-Hans-CN" => lang.pick("中文", "Chinese"),
+        "en-US" | "en-GB" => lang.pick("英语", "English"),
+        "ja-JP" => lang.pick("日语", "Japanese"),
+        "ko-KR" => lang.pick("韩语", "Korean"),
+        "fr-FR" => lang.pick("法语", "French"),
+        "de-DE" => lang.pick("德语", "German"),
+        "es-ES" => lang.pick("西班牙语", "Spanish"),
+        "ru-RU" => lang.pick("俄语", "Russian"),
+        _ => return tag.to_string(),
+    };
+    said.to_string()
+}
+
+/// Puts another tongue on the display. There is no call for it that this Windows keeps:
+/// `SetUserPreferredUILanguages` is not in the kernel's exports, and a program that asks
+/// the loader for it does not start at all. The list is kept in the registry, and read
+/// from there whenever a program asks which tongues its user wants, so writing it is the
+/// change — the same words Windows Settings puts there.
+///
+/// Windows reads the list when a program starts, so what opens after this is worn in the
+/// new tongue; the shell and whatever already runs keep the old until the user signs out.
+pub(crate) fn set_preferred_language(tag: &str) {
+    // (The tongue asked for first, then those already wanted, so none is dropped.)
+    let mut words: Vec<String> = vec![tag.to_string()];
+    words.extend(preferred_languages().into_iter().filter(|word| !same_tongue(tag, word)));
+    reg_write_multi(r"Control Panel\International\User Profile", "Languages", &words);
+    broadcast_settings("intl");
 }
 
 /// A country's name for its two-letter code, in the tongue asked for; the code
@@ -1587,5 +1921,33 @@ mod tests {
         let (_, _, build) = os_version();
         assert!(build > 0, "RtlGetVersion should report a build");
         assert!(os_product().starts_with("Windows"), "{}", os_product());
+    }
+
+    // The lists the language page offers are read from the machine itself: the packs it
+    // carries, the countries it knows and the zones it keeps must each come back with
+    // something in, and the machine's own setting must be found among them — a box that
+    // opens on nothing, or one that cannot say what is worn now, is the bug these stop.
+    #[test]
+    fn the_lists_the_language_page_offers_are_the_machines_own() {
+        let packs = ui_languages();
+        let wanted = preferred_languages();
+        assert!(!packs.is_empty(), "the machine should carry at least one language pack: {packs:?}");
+        assert!(worn_language().is_some(), "the tongue worn now ({wanted:?}) should be one of the packs: {packs:?}");
+
+        let formats = regional_formats();
+        assert!(!formats.is_empty(), "the formats follow the packs: {formats:?}");
+        assert!(current_format().is_some(), "the format worn now ({}) should be one of those offered", locale_name());
+        assert!(!format_name(&formats[0]).is_empty(), "a format should have a name to show");
+
+        let list = countries();
+        assert!(list.len() > 50, "Windows knows hundreds of countries, got {}", list.len());
+        assert!(list.iter().all(|(_, _, code)| !code.is_empty()), "every country has its two letters");
+        assert!(current_country().is_some(), "the country stood in ({}) should be one of those offered", geo_name());
+
+        let zones = zone_choices();
+        assert!(zones.len() > 50, "Windows keeps hundreds of zones, got {}", zones.len());
+        assert!(current_zone_at().is_some(), "the zone stood in ({}) should be one of those offered", current_zone());
+
+        assert!(!time_patterns().is_empty(), "the clock's shapes are a fixed few");
     }
 }
