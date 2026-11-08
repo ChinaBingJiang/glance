@@ -166,6 +166,23 @@ pub fn scale() -> u32 {
     step_of(word_at(r"Control Panel\Desktop\WindowMetrics", "AppliedDPI").unwrap_or(96))
 }
 
+/// Puts the growth the desktop is drawn at: the share written as the DPI
+/// Windows' own panel keeps it, broadcast so the shell follows. Newly opened
+/// windows take it at once; those already open wait until they are next shown,
+/// and the full reach settles after signing out and back in: true when it took.
+pub fn set_scale(percent: u32) -> bool {
+    let dpi = match percent {
+        125 => 120,
+        150 => 144,
+        175 => 168,
+        200 => 192,
+        _ => 96,
+    };
+    write_word(r"Control Panel\Desktop\WindowMetrics", "AppliedDPI", dpi);
+    broadcast("Environment");
+    true
+}
+
 /// The offered growth nearest a figure — the steps lean to the one a figure sits
 /// between.
 fn step_of(dpi: u32) -> u32 {

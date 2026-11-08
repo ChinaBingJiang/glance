@@ -220,6 +220,43 @@ pub mod examples {
 
 /// SMBIOS structure type 1: the system itself.
 const SYSTEM: u8 = 1;
+/// SMBIOS structure type 3: the box it sits in.
+const CHASSIS: u8 = 3;
+
+/// Whether the machine is a laptop rather than a desktop: the chassis the
+/// firmware's inventory (type 3) calls it. Hand-held and convertible boxes
+/// count as laptops, a dock does not; a machine that says nothing of itself
+/// is taken for a desktop.
+pub fn chassis_laptop() -> bool {
+    let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
+    let mut raw = vec![0u8; size as usize];
+    if size == 0 || unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut raw)) } != size {
+        return false;
+    }
+    let table = &raw[RAW_HEADER.min(raw.len())..];
+    let mut at = 0;
+    while at + 4 <= table.len() {
+        let kind = table[at];
+        let length = table[at + 1] as usize;
+        if kind == END_OF_TABLE || length < 4 || at + length > table.len() {
+            break;
+        }
+        if kind == CHASSIS {
+            // The chassis type is the byte at offset 5; the rest of its telling is not wanted.
+            if let Some(&said) = table.get(at + 0x05) {
+                return matches!(said, 9..=14 | 18 | 21 | 30..=32);
+            }
+            return false;
+        }
+        // The formatted part is followed by its strings, ended by two zeros.
+        let mut next = at + length;
+        while next + 1 < table.len() && !(table[next] == 0 && table[next + 1] == 0) {
+            next += 1;
+        }
+        at = next + 2;
+    }
+    false
+}
 
 /// The machine's maker, model and serial number, from the firmware's own
 /// inventory (SMBIOS type 1); each empty where the firmware does not tell
@@ -321,6 +358,11 @@ mod tests {
         let modules = memory_modules();
         println!("{modules:?} -> {:?}, {:?}", describe(&modules), speed(&modules));
         assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn tells_which_box_the_machine_stands_in() {
+        println!("laptop: {}", chassis_laptop());
     }
 
     #[test]

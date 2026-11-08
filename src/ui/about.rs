@@ -22,9 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SIZE, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use super::canvas::{Align, Canvas, Color, Family, Fill, Font};
+use super::canvas::{Align, Canvas, Color, Family, Fill, Font, Point};
 use super::gfx::{self, Frame, Surface};
-use super::icons::Icon;
 use super::settings_window::{fill, text_centred};
 use super::system_settings;
 use super::text::Lang;
@@ -386,8 +385,8 @@ fn paint(frame: &Frame, lang: Lang, dark: bool, card_h: f32) {
     frame.stroke_rounded(Fill::Solid(edge), 0.5, 0.5, CARD_W - 1.0, card_h - 1.0, 16.0, 1.0);
     // The one light, top-left: the red dot that closes the card.
     fill(frame, Color::hex(0xFF_5F_57, 1.0), 16.0, 16.0, 12.0, 12.0, 6.0);
-    // The machine itself, and the name it goes by under it.
-    frame.icon(Icon::AppWindow, super::canvas::Point { x: CARD_W / 2.0, y: 70.0 }, 54.0, dim);
+    // The machine itself drawn as it stands — a laptop opened, or the tower it is — and the name it goes by under it.
+    draw_machine(frame, CARD_W / 2.0, 70.0, dim, bg, crate::smbios::chassis_laptop());
     let centred = |s: &str, font: Font, color: Color, cy: f32| {
         let m = frame.gfx.measure(s, font).min(CARD_W - 2.0 * PAD);
         text_centred(frame, s, font, color, (CARD_W - m) / 2.0, cy, m, Align::Start);
@@ -414,6 +413,40 @@ fn paint(frame: &Frame, lang: Lang, dark: bool, card_h: f32) {
     centred("© 1983–2026 Glance", Font::new(Family::Segoe, 11.0, 400.0), dim, card_h - 22.0);
 }
 
+/// The machine drawn as it stands: an opened laptop for a portable, the
+/// perforated tower for a desktop — after the two Macs macOS shows on this
+/// very card. `ink` is the line's colour, `hole` the shade behind it, so the
+/// tower's lattice reads as punched through. Centred on `(cx, cy)`.
+pub(crate) fn draw_machine(frame: &Frame, cx: f32, cy: f32, ink: Color, hole: Color, laptop: bool) {
+    if laptop {
+        // A laptop, open: the lid stood on its deck.
+        let (lw, lh) = (66.0, 42.0);
+        let (lx, ly) = (cx - lw / 2.0, cy - lh / 2.0 - 7.0);
+        frame.stroke_rounded(Fill::Solid(ink), lx + 1.0, ly + 1.0, lw - 2.0, lh - 2.0, 4.0, 2.0);
+        fill(frame, ink.alpha(0.16), lx + 5.0, ly + 5.0, lw - 10.0, lh - 12.0, 2.0);
+        // The deck, a little wider than the lid, laid flat under it.
+        let by = ly + lh + 1.0;
+        frame.fill_shape(
+            &[Point { x: cx - 33.0, y: by }, Point { x: cx + 33.0, y: by }, Point { x: cx + 44.0, y: by + 6.0 }, Point { x: cx - 44.0, y: by + 6.0 }],
+            Fill::Solid(ink),
+        );
+        fill(frame, hole, cx - 8.0, by + 1.6, 16.0, 2.8, 1.4);
+    } else {
+        // A desktop tower: the case with its front punched in a lattice of holes.
+        let (bw, bh) = (46.0, 60.0);
+        let (bx, by) = (cx - bw / 2.0, cy - bh / 2.0);
+        frame.stroke_rounded(Fill::Solid(ink), bx + 1.0, by + 1.0, bw - 2.0, bh - 2.0, 6.0, 2.0);
+        let (cols, rows) = (5usize, 7usize);
+        for r in 0..rows {
+            for c in 0..cols {
+                let hx = bx + 9.0 + c as f32 * ((bw - 18.0) / (cols - 1) as f32);
+                let hy = by + 10.0 + r as f32 * ((bh - 18.0) / (rows - 1) as f32);
+                frame.fill_circle(ink.alpha(0.5), Point { x: hx, y: hy }, 1.5);
+            }
+        }
+    }
+}
+
 /// The way on: Windows' own page about this PC, which says what the card says and
 /// a good deal more beside.
 fn way_on() {
@@ -422,3 +455,4 @@ fn way_on() {
         let _ = ShellExecuteW(None, w!("open"), &page, None, None, SW_SHOW);
     }
 }
+

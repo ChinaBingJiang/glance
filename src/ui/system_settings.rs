@@ -16,7 +16,8 @@ use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
     RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::System::SystemInformation::{GetProductInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, OSVERSIONINFOW, OS_PRODUCT_TYPE};
+use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetLogicalDrives, GetVolumeInformationW};
 use windows::Win32::UI::Shell::{SHLoadIndirectString, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -402,8 +403,9 @@ pub(crate) fn theme_name(file: &std::path::Path) -> String {
         .map_or(String::new(), |stem| stem.to_string_lossy().into_owned())
 }
 
-/// The wallpaper path a theme file declares: `Wallpaper` under `[WallPaper]`, environment
-/// variables expanded. None where the theme has no wallpaper or the file cannot be read.
+/// The wallpaper path a theme file declares: `Wallpaper` under `[WallPaper]` — or, as Windows
+/// 11 writes its own themes, under `[Control Panel\Desktop]` — with environment variables
+/// expanded. None where the theme has no wallpaper or the file cannot be read.
 pub(crate) fn theme_wallpaper(file: &str) -> Option<String> {
     let bytes = std::fs::read(file).ok()?;
     let written = if bytes.starts_with(&[0xff, 0xfe]) {
@@ -420,7 +422,8 @@ pub(crate) fn theme_wallpaper(file: &str) -> Option<String> {
     for line in written.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            in_wallpaper = line.eq_ignore_ascii_case("[wallpaper]");
+            // (Only the desktop's own section: `[Control Panel\Colors]` keeps a `Wallpaper` colour too.)
+            in_wallpaper = line.eq_ignore_ascii_case("[wallpaper]") || line.eq_ignore_ascii_case("[control panel\\desktop]");
             continue;
         }
         if !in_wallpaper {
@@ -841,14 +844,69 @@ pub(crate) fn set_game_mode(on: bool) {
 
 const WIN_VER: &str = r"Software\Microsoft\Windows NT\CurrentVersion";
 
-/// The installed Windows' edition name, e.g. "Windows 11 Pro".
+/// The running Windows' real version — major, minor and build — read from
+/// `ntdll`'s `RtlGetVersion`. Unlike the old `GetVersionEx`, it is not capped
+/// by an application manifest, so it tells the build the system truly is.
+/// Zeros where the call fails.
+fn os_version() -> (u32, u32, u32) {
+    let mut v = OSVERSIONINFOW { dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32, ..Default::default() };
+    if unsafe { RtlGetVersion(&mut v) }.is_ok() {
+        (v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber)
+    } else {
+        (0, 0, 0)
+    }
+}
+
+/// The edition `GetProductInfo` reports, by its product-type number; empty for
+/// one not named here. This is the licensed edition the system carries, read
+/// from the OS itself rather than the name the registry happens to keep.
+fn product_edition() -> &'static str {
+    let (major, minor, _) = os_version();
+    let mut kind = OS_PRODUCT_TYPE(0);
+    if !unsafe { GetProductInfo(major, minor, 0, 0, &mut kind) }.as_bool() {
+        return "";
+    }
+    match kind.0 {
+        1 | 28 | 71 => "Ultimate",
+        2 | 3 | 5 | 26 | 67 | 68 | 98 | 99 | 100 | 101 => "Home",
+        6 | 7 | 48 | 49 | 69 | 103 => "Pro",
+        161 | 162 => "Pro Workstation",
+        4 | 27 | 70 | 84 | 125 | 126 | 129 | 130 => "Enterprise",
+        121 | 122 => "Education",
+        123 | 131 => "IoT Core",
+        188..=191 => "IoT Enterprise",
+        8 | 12 | 13 | 24 | 25 | 33 | 36 => "Server",
+        _ => "",
+    }
+}
+
+/// The installed Windows' edition, e.g. "Windows 11 Pro" — worked out from the
+/// system's own APIs: the build number tells whether it is 10 or 11 (a build
+/// of 22000 and up is 11, whatever the registry's product name once claimed),
+/// and `GetProductInfo` tells the edition.
 pub(crate) fn os_product() -> String {
-    reg_sz(HKEY_LOCAL_MACHINE, WIN_VER, "ProductName")
+    let (_, _, build) = os_version();
+    let family = if build >= 22000 {
+        "Windows 11"
+    } else if build > 0 {
+        "Windows 10"
+    } else {
+        "Windows"
+    };
+    let edition = product_edition();
+    if edition.is_empty() {
+        family.to_string()
+    } else {
+        format!("{family} {edition}")
+    }
 }
 
 /// The release id and build joined, e.g. "23H2 · 22631"; either may be empty.
+/// The feature-update label (24H2 and the like) lives only in the registry, so
+/// it is read there; the build number comes from `RtlGetVersion`.
 pub(crate) fn os_release() -> (String, String) {
-    (reg_sz(HKEY_LOCAL_MACHINE, WIN_VER, "DisplayVersion"), reg_sz(HKEY_LOCAL_MACHINE, WIN_VER, "CurrentBuildNumber"))
+    let (_, _, build) = os_version();
+    (reg_sz(HKEY_LOCAL_MACHINE, WIN_VER, "DisplayVersion"), if build > 0 { build.to_string() } else { String::new() })
 }
 
 /// The day this Windows was installed, as "YYYY-MM-DD"; empty where it is not there.
@@ -975,7 +1033,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 const STUCK_RECTS: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3";
 
-/// The taskbar's auto-hide byte in StuckRects3.
+/// One byte of StuckRects3: its 12th tells the edge the taskbar stands on, its 16th carries the
+/// state bits (auto-hide among them) — the two must not be read or written as one.
 fn taskbar_byte(at: usize) -> u8 {
     reg_bytes(HKEY_CURRENT_USER, STUCK_RECTS, "Settings").get(at).copied().unwrap_or(0)
 }
@@ -991,13 +1050,15 @@ fn put_taskbar_byte(at: usize, value: u8) {
     broadcast_settings("");
 }
 
-/// Whether the taskbar hides until the pointer comes.
+/// Whether the taskbar hides until the pointer comes: the state byte's second bit, kept apart
+/// from the edge byte the position lives in.
 pub(crate) fn taskbar_autohide() -> bool {
-    taskbar_byte(12) == 2
+    taskbar_byte(16) & 2 != 0
 }
 
 pub(crate) fn set_taskbar_autohide(on: bool) {
-    put_taskbar_byte(12, if on { 2 } else { 3 });
+    let was = taskbar_byte(16);
+    put_taskbar_byte(16, if on { was | 2 } else { was & !2 });
 }
 
 /// The taskbar's edge: 0 left, 1 top, 2 right, 3 bottom.
@@ -1027,6 +1088,16 @@ pub(crate) fn combine_icons() -> u32 {
 pub(crate) fn set_combine_icons(value: u32) {
     reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarGlomLevel", value.clamp(0, 2));
     broadcast_settings("TaskbarGlomLevel");
+}
+
+/// The taskbar's size: Windows' TaskbarSi number, 0 small, 1 medium, 2 large.
+pub(crate) fn taskbar_size() -> u32 {
+    reg_word(HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarSi").unwrap_or(1)
+}
+
+pub(crate) fn set_taskbar_size(value: u32) {
+    reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarSi", value.clamp(0, 2));
+    broadcast_settings("TaskbarSi");
 }
 
 // ---- Wallpaper ----
@@ -1186,17 +1257,16 @@ pub(crate) fn about_facts(zh: bool) -> Vec<(String, String)> {
     if !model.is_empty() {
         facts.push((label("机型", "Model"), model));
     }
-    // Windows edition, its version and build.
-    let cv = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-    let edition = reg_sz(HKEY_LOCAL_MACHINE, cv, "ProductName");
-    let display = reg_sz(HKEY_LOCAL_MACHINE, cv, "DisplayVersion");
-    let build = reg_sz(HKEY_LOCAL_MACHINE, cv, "CurrentBuildNumber");
-    facts.push((label("操作系统", "Operating system"), if edition.trim().is_empty() { String::from("Windows") } else { edition.trim().to_string() }));
+    // Windows edition, its version and build — the name worked out from the
+    // system's own APIs, not the string the registry keeps.
+    let display = reg_sz(HKEY_LOCAL_MACHINE, WIN_VER, "DisplayVersion");
+    let (_, _, build) = os_version();
+    facts.push((label("操作系统", "Operating system"), os_product()));
     if !display.is_empty() {
         facts.push((label("版本", "Version"), display));
     }
-    if !build.is_empty() {
-        facts.push((label("内部版本", "OS build"), build));
+    if build > 0 {
+        facts.push((label("内部版本", "OS build"), build.to_string()));
     }
     // Processor, from the hardware hive.
     let cpu = reg_sz(HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString");
@@ -1492,5 +1562,19 @@ pub(crate) fn reboot_to(recovery: bool) {
             PCWSTR::null(),
             SW_HIDE,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The edition is worked out from the system's own APIs, not the registry:
+    // a real build must come back, and the name must be a Windows one.
+    #[test]
+    fn the_edition_is_read_from_the_system_itself() {
+        let (_, _, build) = os_version();
+        assert!(build > 0, "RtlGetVersion should report a build");
+        assert!(os_product().starts_with("Windows"), "{}", os_product());
     }
 }

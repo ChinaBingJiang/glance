@@ -1420,6 +1420,8 @@ enum Field {
     TaskbarPosition,
     /// How taskbar buttons combine.
     CombineIcons,
+    /// The taskbar's size.
+    TaskbarSize,
     /// How the wallpaper fills the screen.
     WallpaperStyle,
 }
@@ -1763,6 +1765,8 @@ enum Target {
     ModeApply { device: String, wide: u32, tall: u32, hz: u32 },
     /// Warms the screen to a depth of the night light (0 to wash it off).
     NightSet(u32),
+    /// Grows the desktop to a share: 100, 125, 150, 175, or 200.
+    ScaleSet(u32),
     /// Crowns a display as the one things start on.
     SetPrimary(String),
     /// Turns a display: none, a quarter right, upside down, or a quarter left.
@@ -1785,8 +1789,8 @@ enum Target {
     EmptyRecycle,
     /// Storage sense put on or off.
     StorageSenseApply(bool),
-    /// Picks an app to show in the privacy preview: the capability its row sits under, and its name.
-    ConsentSelect(String, String),
+    /// Picks a capability to show its apps in the privacy preview, as Windows names it in the consent store.
+    ConsentSelect(String),
     /// Lets or holds one app's use of a capability.
     ConsentSet { capability: String, keys: Vec<String>, packaged: bool, allow: bool },
 }
@@ -1898,9 +1902,9 @@ enum Row {
     AudioDevice(String, String, bool),
     /// An app with a notification setting, on the Notifications page's left: its name, its id, and whether it is let now.
     NotifyApp(String, String, bool),
-    /// An app's consent for a capability, on the Privacy page's left: the capability it sits under,
-    /// its name, and whether it is let now.
-    ConsentApp(String, String, bool),
+    /// A privacy capability, on the Privacy page's left: as Windows names it in the consent store,
+    /// its word in each tongue, and how many apps have asked for it (None while that is being read).
+    ConsentCap(String, &'static str, &'static str, Option<usize>),
     /// A physical disk, on the Storage page's left: its number, its model, and the room it holds.
     Disk(u32, String, u64),
 }
@@ -3472,23 +3476,16 @@ impl Ui {
                 }));
             }
             (Page::Privacy, _) => {
-                let lang = self.lang;
-                // The apps that have asked to use each capability, grouped down the left by what they
-                // reach for — the whereabout, the microphone, the camera; one app's letting is pressed
-                // in the preview to the right. Each reading runs PowerShell, so all three are taken off-thread.
-                for (cap, word) in [
-                    ("Location", pick(lang, "位置", "Location")),
-                    ("Microphone", pick(lang, "麦克风", "Microphone")),
-                    ("Webcam", pick(lang, "摄像头", "Camera")),
+                // The three reaches apps can ask for, each a row of its own: which apps ask for it, and
+                // whether each is let, is shown in the preview to the right. Each reading runs PowerShell,
+                // so all three are taken off-thread.
+                for (cap, zh, en) in [
+                    ("Location", "位置", "Location"),
+                    ("Microphone", "麦克风", "Microphone"),
+                    ("Webcam", "摄像头", "Camera"),
                 ] {
-                    rows.push(Row::Group(word));
-                    match crate::sys::consent_snapshot(cap) {
-                        Some(apps) if !apps.is_empty() => {
-                            rows.extend(apps.into_iter().map(|a| Row::ConsentApp(cap.to_string(), a.display, a.allowed)));
-                        }
-                        Some(_) => rows.push(Row::Info(pick(lang, "没有应用就这项权限留下记录", "No app has left a mark for this permission").to_string())),
-                        None => rows.push(Row::Info(pick(lang, "正在读取授权…", "Reading the permissions…").to_string())),
-                    }
+                    let told = crate::sys::consent_snapshot(cap).map(|apps| apps.len());
+                    rows.push(Row::ConsentCap(cap.to_string(), zh, en, told));
                 }
                 rows.push(Row::Do(Do {
                     name: ("Windows 的隐私设置", "Windows' privacy settings"),
@@ -3669,6 +3666,7 @@ impl Ui {
                     Row::Switch(Switch::TaskbarAutohide),
                     Row::Switch(Switch::TaskbarSmall),
                     Row::Choice(Field::TaskbarPosition),
+                    Row::Choice(Field::TaskbarSize),
                     Row::Choice(Field::CombineIcons),
                     Row::Note(pick(
                         lang,
@@ -4196,9 +4194,19 @@ impl Ui {
         }
     }
 
-    /// The edge the preview's panel opens from, on the screen it shows: the first of that screen's that opens what it
-    /// shows, else the first that opens anything; where none does, the one a panel opened by hand opens from.
+    /// The edge the preview's panel opens from, on the screen it shows: on the desktop's page, the edge Windows
+    /// keeps its taskbar on (the panel has no foot of its own, so a taskbar kept there leaves the places to speak,
+    /// as on every other page); else the first of that screen's that opens what it shows, else the first that opens
+    /// anything; where none does, the one a panel opened by hand opens from.
     fn preview_edge(&self) -> Edge {
+        if self.page == Page::Desktop {
+            match super::system_settings::taskbar_position() {
+                1 => return Edge::Top,
+                0 => return Edge::Left,
+                2 => return Edge::Right,
+                _ => {}
+            }
+        }
         let places = self.settings.places();
         let screen = self.stage.screen.as_deref().unwrap_or_default();
         let lit = places.lit(screen);
@@ -4641,10 +4649,15 @@ impl Ui {
                 let detail = if *enabled { p("允许通知", "Allowed") } else { p("已禁止", "Off") };
                 (display.clone(), detail, Vec::new())
             }
-            // An app's consent: its name and whether it is let now. Nothing to press here — the body picks it for the preview.
-            Row::ConsentApp(_, display, allowed) => {
-                let detail = if *allowed { p("已允许", "Allowed") } else { p("已拒绝", "Blocked") };
-                (display.clone(), detail, Vec::new())
+            // A privacy capability: its word, and how many apps have asked for it. Nothing to press here
+            // — the body picks it to show its apps in the preview.
+            Row::ConsentCap(_, zh, en, told) => {
+                let detail = match told {
+                    Some(0) => p("没有应用留下记录", "No app has left a mark"),
+                    Some(n) => if lang == Lang::Zh { format!("{n} 个应用") } else { format!("{n} apps") },
+                    None => p("正在读取授权…", "Reading the permissions…"),
+                };
+                (p(zh, en), detail, Vec::new())
             }
             // A physical disk: its model (or a plain number when it reports none) and the room it holds.
             // Nothing to press here — the body picks it to show its volumes in the preview.
@@ -4838,6 +4851,11 @@ impl Ui {
                 vec![s("始终", "Always"), s("任务栏满时", "When full"), s("从不", "Never")],
                 [0u32, 1, 2].iter().position(|&n| n == super::system_settings::combine_icons()),
             ),
+            Field::TaskbarSize => (
+                pick(lang, "任务栏大小", "Taskbar size"),
+                vec![s("小", "Small"), s("标准", "Medium"), s("大", "Large")],
+                [0u32, 1, 2].iter().position(|&n| n == super::system_settings::taskbar_size()),
+            ),
             Field::WallpaperStyle => (
                 pick(lang, "显示方式", "Choose a fit"),
                 vec![s("填充", "Fill"), s("适合", "Fit"), s("拉伸", "Stretch"), s("居中", "Center"), s("平铺", "Tile")],
@@ -4898,6 +4916,7 @@ impl Ui {
             Field::ScrollLines => super::system_settings::set_scroll_lines([1, 3, 5, u32::MAX][index]),
             Field::TaskbarPosition => super::system_settings::set_taskbar_position([3, 1, 0, 2][index]),
             Field::CombineIcons => super::system_settings::set_combine_icons([0, 1, 2][index]),
+            Field::TaskbarSize => super::system_settings::set_taskbar_size([0, 1, 2][index]),
             Field::WallpaperStyle => super::system_settings::set_wallpaper_style([10, 6, 2, 0, 0][index]),
             // (Slid rather than chosen: see `set_slider`.)
             Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => {}
@@ -6334,6 +6353,11 @@ impl Ui {
                 crate::sys::set_night(level);
                 self.next_frame = Instant::now();
             }
+            // The desktop grown to a share; open windows wait to be shown again.
+            Target::ScaleSet(percent) => {
+                crate::sys::set_scale(percent);
+                self.next_frame = Instant::now();
+            }
             // Another screen crowned as the one things start on; the layout read again.
             Target::SetPrimary(device) => {
                 crate::sys::set_primary(&device);
@@ -6390,8 +6414,8 @@ impl Ui {
                 crate::sys::storage_sense_apply(on);
                 self.next_frame = Instant::now();
             }
-            // Picking a capability's apps to show in the privacy preview; the whole list is drawn under that head.
-            Target::ConsentSelect(capability, _display) => {
+            // Picking a capability to show its apps in the privacy preview.
+            Target::ConsentSelect(capability) => {
                 self.privacy_capability = capability;
                 self.next_frame = Instant::now();
             }
@@ -6482,7 +6506,7 @@ impl Ui {
                 Row::Screen(..) => vec![],
                 Row::AudioDevice(..) => vec![],
                 Row::NotifyApp(..) => vec![],
-                Row::ConsentApp(..) => vec![],
+                Row::ConsentCap(..) => vec![],
                 Row::Disk(..) => vec![],
                 Row::Do(d) => vec![d.what],
                 Row::Nav(.., target) => vec![target.clone()],
@@ -7634,13 +7658,12 @@ impl Ui {
                     field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
                     self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::NotifySelect(aumid)));
                 }
-                // An app's consent: its glyph lit when it is let; the body picks it for the preview.
-                Row::ConsentApp(..) => {
+                // A privacy capability: its glyph lit while its apps are the ones shown in the preview;
+                // the body picks it for the preview.
+                Row::ConsentCap(..) => {
                     let Some((name, detail, buttons)) = self.button_row(&row, now) else { continue };
-                    let allowed = matches!(&row, Row::ConsentApp(_, _, true));
-                    // The row is picked by its capability and name, so the preview shows this app under this reach.
-                    let (cap, display) = match &row {
-                        Row::ConsentApp(cap, display, _) => (cap.clone(), display.clone()),
+                    let cap = match &row {
+                        Row::ConsentCap(cap, ..) => cap.clone(),
                         _ => continue,
                     };
                     card(frame, palette, left, y, width, row_height, palette.card);
@@ -7648,10 +7671,10 @@ impl Ui {
                     for (text, target, kind) in buttons {
                         right = self.button(frame, palette, &text, right, y + row_height / 2.0, target, kind, &hovered) - 8.0;
                     }
-                    let glyph = if allowed { palette.selection } else { palette.text.alpha(0.85) };
+                    let glyph = if self.privacy_capability == cap { palette.selection } else { palette.text.alpha(0.85) };
                     frame.icon(Icon::Shield, Point { x: left + ROW_SIDE + 11.0, y: y + row_height / 2.0 }, 17.0, glyph);
                     field_label(frame, palette, &name, Some(&detail), label, hint, left + ROW_SIDE + 30.0, y + row_height / 2.0, right - 8.0 - left - ROW_SIDE - 30.0);
-                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::ConsentSelect(cap, display)));
+                    self.targets.push((Rect { x: left, y, w: (right + 8.0 - left).max(0.0), h: row_height }, Target::ConsentSelect(cap)));
                 }
                 // A physical disk: its glyph, its model and the room it holds; the body picks it for the preview.
                 Row::Disk(..) => {
@@ -8360,6 +8383,7 @@ impl Ui {
             Page::Power => pick(lang, "电池与用电", "Battery and its power"),
             Page::Gaming => pick(lang, "游戏模式与 DVR", "Game Mode and the DVR"),
             Page::Appearance => pick(lang, "主题预览与确认", "Theme preview and confirm"),
+            Page::Desktop => pick(lang, "任务栏在屏幕一角的模样", "The taskbar as it stands on your screen"),
             _ => pick(lang, "实时数据", "Live readings"),
         };
         let title_w = frame.gfx.measure(title, head);
@@ -8449,9 +8473,10 @@ impl Ui {
             Page::Power => self.paint_power_preview(frame, palette, area),
             Page::ScreenTime => self.paint_screen_time_preview(frame, palette, area),
             Page::Wallpaper => self.paint_wallpaper_preview(frame, palette, area),
+            Page::Desktop => self.paint_desktop_preview(frame, palette, area),
             _ => {}
         }
-        if matches!(self.page, Page::Wifi | Page::Bluetooth | Page::Network | Page::Display | Page::Sound | Page::Notifications | Page::Storage | Page::Privacy | Page::Gaming | Page::Power | Page::ScreenTime | Page::Wallpaper) {
+        if matches!(self.page, Page::Wifi | Page::Bluetooth | Page::Network | Page::Display | Page::Sound | Page::Notifications | Page::Storage | Page::Privacy | Page::Gaming | Page::Power | Page::ScreenTime | Page::Wallpaper | Page::Desktop) {
             return None;
         }
 
@@ -8620,9 +8645,9 @@ impl Ui {
             if m >= 1.0 { format!("{m:.0} {}", p("Mbps", "Mbps")) } else { format!("{:.0} {}", rate as f64 / 1000.0, p("Kbps", "Kbps")) }
         };
         let line = |label: String, shown: String, y: &mut f32| {
-            text_centred(frame, &label, name, palette.text2, inner.x, *y + 12.0, inner.w * 0.5, Align::Start);
-            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 12.0, inner.w * 0.5, Align::End);
-            *y += 30.0;
+            text_centred(frame, &label, name, palette.text2, inner.x, *y + 15.0, inner.w * 0.5, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 15.0, inner.w * 0.5, Align::End);
+            *y += 44.0;
         };
         let state = if net.connected {
             p("已连接", "Connected")
@@ -8646,20 +8671,20 @@ impl Ui {
         // The key kept for it, masked until asked; read from its profile (see `crate::wifi::password`).
         y += 6.0;
         if net.profile.is_empty() {
-            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
-            text_centred(frame, &p("连接后才会保存密码", "Its key is kept only once joined"), value, palette.text3, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.6, Align::Start);
+            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 15.0, inner.w * 0.4, Align::Start);
+            text_centred(frame, &p("连接后才会保存密码", "Its key is kept only once joined"), value, palette.text3, inner.x + inner.w * 0.4, y + 15.0, inner.w * 0.6, Align::Start);
         } else {
             let shown = self.wifi_key.clone();
-            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
+            text_centred(frame, &p("密码", "Password"), name, palette.text2, inner.x, y + 15.0, inner.w * 0.4, Align::Start);
             let key_text = match &shown {
                 Some(key) if !key.is_empty() => key.clone(),
                 Some(_) => p("无法读取（需管理员权限）", "Cannot be read (needs administrator)"),
                 None => "••••••••".to_string(),
             };
-            text_centred(frame, &key_text, value, palette.text, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.5 - 8.0, Align::Start);
+            text_centred(frame, &key_text, value, palette.text, inner.x + inner.w * 0.4, y + 15.0, inner.w * 0.5 - 8.0, Align::Start);
             let word = if shown.is_some() { p("隐藏", "Hide") } else { p("显示密码", "Show password") };
-            self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::WifiKey, Button::Plain, &None);
-            y += 40.0;
+            self.button(frame, palette, &word, inner.x + inner.w, y + 15.0, Target::WifiKey, Button::Plain, &None);
+            y += 44.0;
         }
         // The network joined now can be let go of here, without forgetting it.
         if net.connected {
@@ -8704,9 +8729,9 @@ impl Ui {
         text_centred(frame, &d.name, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
         y += 34.0;
         let line = |label: String, shown: String, y: &mut f32| {
-            text_centred(frame, &label, name, palette.text2, inner.x, *y + 12.0, inner.w * 0.5, Align::Start);
-            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 12.0, inner.w * 0.5, Align::End);
-            *y += 30.0;
+            text_centred(frame, &label, name, palette.text2, inner.x, *y + 15.0, inner.w * 0.5, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.5, *y + 15.0, inner.w * 0.5, Align::End);
+            *y += 44.0;
         };
         line(p("地址", "Address"), d.addr.clone(), &mut y);
         let state = if d.connected {
@@ -8726,7 +8751,7 @@ impl Ui {
     /// wallpapered thumbnails to pick from, then what the picked one is used as, the
     /// resolutions as scaled desktops (larger text to more space), the refresh and the
     /// rotation as segmented choices that write back, and the colour profile and HDR read
-    /// only — a press there leads to Windows' own page. The scale and night light stay below.
+    /// only — a press there leads to Windows' own page. The scale is set here too.
     fn paint_display_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
@@ -8809,16 +8834,17 @@ impl Ui {
         y += box_h + 30.0;
 
         // What this screen is for; another may be crowned the one things start on.
-        text_centred(frame, &p("用作", "Use as"), label, palette.text, inner.x, y + 14.0, inner.w * 0.4, Align::Start);
+        text_centred(frame, &p("用作", "Use as"), label, palette.text, inner.x, y + 15.0, inner.w * 0.4, Align::Start);
         if primary {
-            text_centred(frame, &p("主显示器", "Main display"), value, palette.text2, inner.x + inner.w * 0.4, y + 14.0, inner.w * 0.6, Align::End);
+            text_centred(frame, &p("主显示器", "Main display"), value, palette.text2, inner.x + inner.w * 0.4, y + 15.0, inner.w * 0.6, Align::End);
         } else {
-            self.button(frame, palette, &p("设为主显示器", "Make main"), inner.x + inner.w, y + 14.0, Target::SetPrimary(device.clone()), Button::Plain, &None);
+            self.button(frame, palette, &p("设为主显示器", "Make main"), inner.x + inner.w, y + 15.0, Target::SetPrimary(device.clone()), Button::Plain, &None);
         }
-        y += 34.0;
+        y += 44.0;
 
         // The sizes as macOS shows them: not a list of figures but the desktop itself at each,
         // its word growing as the pixels thin — the left end larger text, the right more space.
+        // Each card is named with the pixels it stands for; a reading told in halves is no reading.
         text_centred(frame, &p("分辨率", "Resolution"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
         y += 24.0;
         if modes.is_empty() {
@@ -8852,8 +8878,11 @@ impl Ui {
                 let worn = here.is_some_and(|c| c.wide == m.wide && c.tall == m.tall);
                 stroke_inside(frame, Rect { x: cx, y, w: rcw, h: rch }, 5.0, if worn { palette.selection } else { palette.card_stroke });
                 self.targets.push((Rect { x: cx, y, w: rcw, h: rch }, Target::ModeApply { device: device.clone(), wide: m.wide, tall: m.tall, hz: now_hz }));
+                let figure = format!("{}×{}", m.wide, m.tall);
+                let fw = frame.gfx.measure(&figure, small);
+                text_centred(frame, &figure, small, if worn { palette.text } else { palette.text3 }, cx + (rcw - fw) / 2.0, y + rch + 10.0, fw, Align::Start);
             }
-            y += rch + 4.0;
+            y += rch + 26.0;
             text_centred(frame, &p("更大字体", "Larger Text"), small, palette.text3, inner.x, y + 8.0, inner.w * 0.5, Align::Start);
             text_centred(frame, &p("更多空间", "More Space"), small, palette.text3, inner.x + inner.w * 0.5, y + 8.0, inner.w * 0.5, Align::End);
             y += 22.0;
@@ -8862,47 +8891,53 @@ impl Ui {
         // The rates this size will draw at, the worn one marked; a press keeps the size and
         // takes the rate. Where only one is offered, it is said rather than chosen.
         let rates = here.map(|c| crate::sys::refreshes(&device, c.wide, c.tall)).unwrap_or_default();
-        text_centred(frame, &p("刷新率", "Refresh"), label, palette.text, inner.x, y + 14.0, inner.w * 0.4, Align::Start);
+        text_centred(frame, &p("刷新率", "Refresh"), label, palette.text, inner.x, y + 15.0, inner.w * 0.4, Align::Start);
         if rates.len() <= 1 {
             let said = here.map(|c| format!("{} Hz", c.hz)).unwrap_or_else(|| p("未知", "Unknown"));
-            text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.4, y + 14.0, inner.w * 0.6, Align::End);
+            text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.4, y + 15.0, inner.w * 0.6, Align::End);
         } else {
             let mut right = inner.x + inner.w;
             for hz in rates.iter().rev() {
                 let kind = if *hz == now_hz { Button::Accent } else { Button::Plain };
-                right = self.button(frame, palette, &format!("{hz} Hz"), right, y + 14.0, Target::ModeApply { device: device.clone(), wide: cw, tall: ch, hz: *hz }, kind, &None) - 8.0;
+                right = self.button(frame, palette, &format!("{hz} Hz"), right, y + 15.0, Target::ModeApply { device: device.clone(), wide: cw, tall: ch, hz: *hz }, kind, &None) - 8.0;
             }
         }
-        y += 34.0;
+        y += 44.0;
 
         // The way round the screen is drawn, four turns; a driver that will not take one keeps
         // the screen as it was.
-        text_centred(frame, &p("旋转", "Rotation"), label, palette.text, inner.x, y + 14.0, inner.w * 0.3, Align::Start);
+        text_centred(frame, &p("旋转", "Rotation"), label, palette.text, inner.x, y + 15.0, inner.w * 0.3, Align::Start);
         let mut right = inner.x + inner.w;
         for (word, want) in [(p("倒置", "Upside down"), 3u32), (p("翻转", "Flipped"), 2), (p("竖屏", "Portrait"), 1), (p("标准", "Standard"), 0)] {
             let kind = if orient == want { Button::Accent } else { Button::Plain };
-            right = self.button(frame, palette, &word, right, y + 14.0, Target::RotateSet { device: device.clone(), orient: want }, kind, &None) - 8.0;
+            right = self.button(frame, palette, &word, right, y + 15.0, Target::RotateSet { device: device.clone(), orient: want }, kind, &None) - 8.0;
         }
-        y += 34.0;
+        y += 44.0;
 
         // The colour profile and the high dynamic range are the system's to set; here they are
         // only read (a profile by its file) and pressed to Windows' own page.
         let prof = crate::sys::color_profile(&device);
         let said = if prof.is_empty() { p("未关联", "None") } else { prof };
-        text_centred(frame, &p("颜色描述文件", "Colour profile"), label, palette.text, inner.x, y + 14.0, inner.w * 0.45, Align::Start);
-        text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.45, y + 14.0, inner.w * 0.55, Align::End);
-        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 28.0 }, Target::Open("ms-settings:display".into())));
-        y += 30.0;
-        text_centred(frame, &p("高动态范围", "High dynamic range"), label, palette.text, inner.x, y + 14.0, inner.w * 0.55, Align::Start);
-        text_centred(frame, &p("在系统中设置", "Set in Windows"), value, palette.text2, inner.x + inner.w * 0.55, y + 14.0, inner.w * 0.45, Align::End);
-        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 28.0 }, Target::Open("ms-settings:display".into())));
-        y += 30.0;
+        text_centred(frame, &p("颜色描述文件", "Colour profile"), label, palette.text, inner.x, y + 15.0, inner.w * 0.45, Align::Start);
+        text_centred(frame, &said, value, palette.text2, inner.x + inner.w * 0.45, y + 15.0, inner.w * 0.55, Align::End);
+        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 34.0 }, Target::Open("ms-settings:display".into())));
+        y += 44.0;
+        text_centred(frame, &p("高动态范围", "High dynamic range"), label, palette.text, inner.x, y + 15.0, inner.w * 0.55, Align::Start);
+        text_centred(frame, &p("在系统中设置", "Set in Windows"), value, palette.text2, inner.x + inner.w * 0.55, y + 15.0, inner.w * 0.45, Align::End);
+        self.targets.push((Rect { x: inner.x, y, w: inner.w, h: 34.0 }, Target::Open("ms-settings:display".into())));
+        y += 44.0;
 
-        // The desktop's growth, read only — Windows lays it out at once, so it is left to the
-        // system's page — and the night light, warmed here and washed off by itself.
+        // The desktop's growth, set here as Windows' own panel does: newly opened windows take
+        // it at once, the rest wait to be shown again — said under the row rather than hidden.
         let scale = crate::sys::scale();
-        text_centred(frame, &p("缩放", "Scale"), value, palette.text2, inner.x, y + 12.0, inner.w * 0.4, Align::Start);
-        text_centred(frame, &format!("{scale}%"), value, palette.text, inner.x + inner.w * 0.4, y + 12.0, inner.w * 0.6, Align::End);
+        text_centred(frame, &p("缩放", "Scale"), label, palette.text, inner.x, y + 15.0, inner.w * 0.3, Align::Start);
+        let mut right = inner.x + inner.w;
+        for step in [200u32, 175, 150, 125, 100] {
+            let kind = if scale == step { Button::Accent } else { Button::Plain };
+            right = self.button(frame, palette, &format!("{step}%"), right, y + 15.0, Target::ScaleSet(step), kind, &None) - 8.0;
+        }
+        y += 34.0;
+        text_centred(frame, &p("新开的窗口即刻采用，已开着的等重新显示才跟上。", "Windows opened after the change take it at once; those already open follow when they are next shown."), small, palette.text3, inner.x, y + 6.0, inner.w, Align::Start);
         y += 30.0;
         text_centred(frame, &p("夜间光照", "Night light"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
         y += 24.0;
@@ -8950,13 +8985,13 @@ impl Ui {
         let value = Font::new(Family::Segoe, 13.5, 600.0);
         let mut y = inner.y;
         text_centred(frame, &d.name, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-        y += 30.0;
+        y += 40.0;
         let mut where_ = if d.render { p("输出", "Output") } else { p("输入", "Input") };
         if d.default {
             where_ = format!("{where_} · {}", p("默认", "Default"));
         }
         text_centred(frame, &where_, small, palette.text3, inner.x, y + 4.0, inner.w, Align::Start);
-        y += 34.0;
+        y += 44.0;
         // The volume, as a track filled to where it stands, and set by the twenty steps along it.
         text_centred(frame, &p("音量", "Volume"), value, palette.text2, inner.x, y + 10.0, inner.w * 0.4, Align::Start);
         let shown = if d.muted { p("已静音", "Muted") } else { format!("{}%", d.volume) };
@@ -8999,14 +9034,14 @@ impl Ui {
         let mut y = inner.y;
         // The master switch: notices let at all, or held from every app at once.
         text_centred(frame, &p("通知", "Notifications"), Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-        y += 26.0;
+        y += 30.0;
         let master = crate::sys::notify_master();
         let mut right = inner.x + inner.w;
         for (on, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
             let kind = if master == on { Button::Accent } else { Button::Plain };
             right = self.button(frame, palette, &word, right, y + 12.0, Target::NotifyMaster(on), kind, &None) - 8.0;
         }
-        y += 34.0;
+        y += 44.0;
         let Some(apps) = crate::sys::notify_snapshot() else {
             say(&p("正在读取通知设置…", "Reading the notification settings…"));
             self.next_frame = Instant::now() + Duration::from_millis(1500);
@@ -9026,10 +9061,10 @@ impl Ui {
         let head = Font::new(Family::Segoe, 16.0, 600.0);
         let small = Font::new(Family::Segoe, 12.0, 400.0);
         text_centred(frame, &a.display, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-        y += 30.0;
+        y += 40.0;
         let state = if a.enabled { p("允许通知", "Allowed") } else { p("已禁止", "Off") };
         text_centred(frame, &state, small, if a.enabled { palette.selection } else { palette.text3 }, inner.x, y + 4.0, inner.w, Align::Start);
-        y += 30.0;
+        y += 44.0;
         // Letting the app's banners, or holding them.
         let word = if a.enabled { p("禁止通知", "Turn off") } else { p("允许通知", "Turn on") };
         self.button(frame, palette, &word, inner.x + inner.w, y + 12.0, Target::NotifyToggle { aumid: a.aumid.clone(), on: !a.enabled }, Button::Plain, &None);
@@ -9054,9 +9089,9 @@ impl Ui {
         // A name at the left of a row and its figures at the right, the two columns kept
         // the width apart that the words of the left need.
         let line = |label: String, shown: String, y: &mut f32| {
-            text_centred(frame, &label, value, palette.text2, inner.x, *y + 10.0, inner.w * 0.4, Align::Start);
-            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.4, *y + 10.0, inner.w * 0.6, Align::End);
-            *y += 30.0;
+            text_centred(frame, &label, value, palette.text2, inner.x, *y + 15.0, inner.w * 0.4, Align::Start);
+            text_centred(frame, &shown, value, palette.text, inner.x + inner.w * 0.4, *y + 15.0, inner.w * 0.6, Align::End);
+            *y += 44.0;
         };
         let mut y = inner.y;
         // The disk picked at the left (the first when none is yet), and each letter mounted on it: the
@@ -9071,13 +9106,13 @@ impl Ui {
             .or(disks.first());
         match chosen {
             None => {
-                text_centred(frame, &p("没读到可用的磁盘。", "No drive could be read."), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y, inner.w, Align::Start);
-                y += 30.0;
+                text_centred(frame, &p("没读到可用的磁盘。", "No drive could be read."), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y + 5.0, inner.w, Align::Start);
+                y += 44.0;
             }
             Some(disk) => {
                 let word = if disk.model.is_empty() { format!("{} {}", p("磁盘", "Disk"), disk.number) } else { disk.model.clone() };
                 text_centred(frame, &format!("{word} · {}", human_bytes(disk.size)), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, y + 4.0, inner.w, Align::Start);
-                y += 26.0;
+                y += 40.0;
                 for (name, used, total) in &disk.volumes {
                     line(name.clone(), super::text::usage(*used, *total), &mut y);
                 }
@@ -9087,16 +9122,16 @@ impl Ui {
         match crate::sys::storage_snapshot() {
             Some(shot) => {
                 // The temporary files, and the button that frees what is not locked.
-                text_centred(frame, &p("临时文件", "Temporary files"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-                text_centred(frame, &human_bytes(shot.temp), value, palette.text, inner.x + inner.w * 0.5, y + 10.0, inner.w * 0.5, Align::End);
-                y += 34.0;
-                self.button(frame, palette, &p("清理临时文件", "Clear temporary files"), inner.x + inner.w, y + 8.0, Target::CleanTemp, Button::Plain, &None);
-                y += 34.0;
+                text_centred(frame, &p("临时文件", "Temporary files"), head, palette.text, inner.x, y + 15.0, inner.w, Align::Start);
+                text_centred(frame, &human_bytes(shot.temp), value, palette.text, inner.x + inner.w * 0.5, y + 15.0, inner.w * 0.5, Align::End);
+                y += 44.0;
+                self.button(frame, palette, &p("清理临时文件", "Clear temporary files"), inner.x + inner.w, y + 15.0, Target::CleanTemp, Button::Plain, &None);
+                y += 44.0;
                 // The recycle bin, and the button that empties it.
-                text_centred(frame, &p("回收站", "Recycle bin"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-                text_centred(frame, &format!("{} · {} {}", human_bytes(shot.recycle_bytes), shot.recycle_count, p("项", "items")), value, palette.text, inner.x + inner.w * 0.4, y + 10.0, inner.w * 0.6, Align::End);
-                y += 34.0;
-                self.button(frame, palette, &p("清空回收站", "Empty recycle bin"), inner.x + inner.w, y + 8.0, Target::EmptyRecycle, Button::Plain, &None);
+                text_centred(frame, &p("回收站", "Recycle bin"), head, palette.text, inner.x, y + 15.0, inner.w, Align::Start);
+                text_centred(frame, &format!("{} · {} {}", human_bytes(shot.recycle_bytes), shot.recycle_count, p("项", "items")), value, palette.text, inner.x + inner.w * 0.4, y + 15.0, inner.w * 0.6, Align::End);
+                y += 44.0;
+                self.button(frame, palette, &p("清空回收站", "Empty recycle bin"), inner.x + inner.w, y + 15.0, Target::EmptyRecycle, Button::Plain, &None);
             }
             None => {
                 say(&p("正在统计磁盘占用…", "Tallying what the disk holds…"));
@@ -9105,13 +9140,13 @@ impl Ui {
         }
         y += 44.0;
         // Storage sense: the tidying Windows does of its own.
-        text_centred(frame, &p("存储感知", "Storage Sense"), head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-        y += 30.0;
+        text_centred(frame, &p("存储感知", "Storage Sense"), head, palette.text, inner.x, y + 15.0, inner.w, Align::Start);
+        y += 44.0;
         let sense = crate::sys::storage_sense();
         let mut right = inner.x + inner.w;
         for (on, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
             let kind = if sense == on { Button::Accent } else { Button::Plain };
-            right = self.button(frame, palette, &word, right, y + 12.0, Target::StorageSenseApply(on), kind, &None) - 8.0;
+            right = self.button(frame, palette, &word, right, y + 15.0, Target::StorageSenseApply(on), kind, &None) - 8.0;
         }
     }
 
@@ -9138,8 +9173,8 @@ impl Ui {
             "Microphone" => p("麦克风", "Microphone"),
             _ => p("摄像头", "Camera"),
         };
-        text_centred(frame, &reach, Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 10.0, inner.w, Align::Start);
-        y += 34.0;
+        text_centred(frame, &reach, Font::new(Family::Segoe, 13.0, 600.0), palette.text, inner.x, y + 12.0, inner.w, Align::Start);
+        y += 44.0;
         let Some(apps) = crate::sys::consent_snapshot(&capability) else {
             say(&p("正在读取授权…", "Reading the permissions…"));
             self.next_frame = Instant::now() + Duration::from_millis(1500);
@@ -9150,34 +9185,24 @@ impl Ui {
             return;
         }
         // One line per app, kept together under hairlines: its name, whether it is let now, and
-        // the pair of buttons that lets or holds it back. What does not fit the pane is scrolled
+        // the switch that lets or holds it back. What does not fit the pane is scrolled
         // through, as the hub's cards are; the reach past its bottom is told for the scroll.
         let font = Font::new(Family::Segoe, 13.0, 400.0);
         let small = Font::new(Family::Segoe, HINT, 400.0);
-        let row = 46.0;
+        let row = 56.0;
         for a in apps {
             if y > inner.y {
                 fill(frame, palette.rule, inner.x, y, inner.w, 1.0, 0.0);
             }
-            text_centred(frame, &a.display, font, palette.text, inner.x, y + row / 2.0 - 9.0, inner.w * 0.55, Align::Start);
+            text_centred(frame, &a.display, font, palette.text, inner.x, y + row / 2.0 - 11.0, inner.w * 0.55, Align::Start);
             let said = if a.allowed { p("已允许", "Allowed") } else { p("已拒绝", "Blocked") };
-            text_centred(frame, &said, small, if a.allowed { palette.selection } else { palette.text3 }, inner.x, y + row / 2.0 + 9.0, inner.w * 0.4, Align::Start);
-            let mut right = inner.x + inner.w;
-            for (allow, word) in [(true, p("允许", "Allow")), (false, p("拒绝", "Block"))]
-                .into_iter()
-                .filter(|(allow, _)| *allow != a.allowed)
-            {
-                right = self.button(
-                    frame,
-                    palette,
-                    &word,
-                    right,
-                    y + row / 2.0,
-                    Target::ConsentSet { capability: capability.clone(), keys: a.keys.clone(), packaged: a.packaged, allow },
-                    Button::Plain,
-                    &None,
-                ) - 8.0;
-            }
+            text_centred(frame, &said, small, if a.allowed { palette.selection } else { palette.text3 }, inner.x, y + row / 2.0 + 11.0, inner.w * 0.4, Align::Start);
+            // The one switch that lets the app or holds it back, as every other card's row wears it.
+            let target = Target::ConsentSet { capability: capability.clone(), keys: a.keys.clone(), packaged: a.packaged, allow: !a.allowed };
+            let switch_left = inner.x + inner.w - 40.0;
+            let pressed = self.pressed == Some(target.clone());
+            self.toggle(frame, palette, format!("toggle:consent:{capability}:{}", a.display), a.allowed, true, switch_left, y + row / 2.0, Instant::now(), pressed);
+            self.targets.push((Rect { x: inner.x, y, w: inner.w, h: row }, target));
             y += row;
         }
         self.hanging = (y - (area.y + area.h)).max(0.0);
@@ -9199,13 +9224,13 @@ impl Ui {
             (p("游戏模式", "Game Mode"), super::system_settings::game_mode(), Switch::GameMode),
             (p("游戏 DVR", "Game DVR"), super::system_settings::game_flag("AppCaptureEnabled"), Switch::GameDvr),
         ] {
-            text_centred(frame, &label, head, palette.text, inner.x, y + 10.0, inner.w, Align::Start);
+            text_centred(frame, &label, head, palette.text, inner.x, y + 15.0, inner.w, Align::Start);
             let mut right = inner.x + inner.w;
             for (want, word) in [(true, p("开", "On")), (false, p("关", "Off"))] {
                 let kind = if on == want { Button::Accent } else { Button::Plain };
-                right = self.button(frame, palette, &word, right, y + 12.0, Target::Switch(switch), kind, &None) - 8.0;
+                right = self.button(frame, palette, &word, right, y + 15.0, Target::Switch(switch), kind, &None) - 8.0;
             }
-            y += 46.0;
+            y += 56.0;
         }
     }
 
@@ -9337,7 +9362,8 @@ impl Ui {
         font: Font,
         hint: Font,
     ) -> f32 {
-        self.grouped_card_spaced(frame, palette, x, y, width, heading, lines, door, font, hint, 32.0)
+        // (The room between lines is the About card's own: every card in the hub breathes the same.)
+        self.grouped_card_spaced(frame, palette, x, y, width, heading, lines, door, font, hint, 44.0)
     }
 
     /// A card of the hub's shape: a heading, its lines of name and value kept
@@ -9434,7 +9460,7 @@ impl Ui {
     ) -> f32 {
         let pad = 14.0;
         let head = 34.0;
-        let row = 40.0;
+        let row = 44.0;
         let switch = 40.0;
         let mut h = if heading.is_some() { head } else { pad };
         if said.is_some() {
@@ -9933,7 +9959,7 @@ impl Ui {
         let col = (area.w - 2.0 * margin).min(560.0);
         let line = 44.0;
         let x = area.x + (area.w - col) / 2.0;
-        frame.icon(Icon::AppWindow, Point { x: area.x + area.w / 2.0, y: area.y + margin + 34.0 }, 52.0, palette.text2);
+        super::about::draw_machine(frame, area.x + area.w / 2.0, area.y + margin + 34.0, palette.text2, palette.card, crate::smbios::chassis_laptop());
         let named = super::system_settings::computer_name();
         text_middle(frame, &named, Font::new(Family::Segoe, 17.0, 600.0), palette.text, x + col / 2.0, area.y + margin + 84.0);
         text_middle(frame, pick(lang, "本机", "This PC"), Font::new(Family::Segoe, HINT, 400.0), palette.text2, x + col / 2.0, area.y + margin + 104.0);
@@ -10350,6 +10376,122 @@ impl Ui {
         if listed.is_empty() {
             text_centred(frame, &p("未找到墙纸文件", "No wallpaper files found"), Font::new(Family::Segoe, 13.0, 400.0), palette.text2, inner.x, grid_top + 10.0, inner.w, Align::Start);
         }
+    }
+
+    /// The desktop and taskbar page's preview: a screen with its taskbar drawn
+    /// on the chosen edge, at the chosen size, its buttons grouped as chosen,
+    /// and reduced to a thin strip when it hides.
+    fn paint_desktop_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+
+        let position = super::system_settings::taskbar_position(); // 0 left, 1 top, 2 right, 3 bottom
+        let size = super::system_settings::taskbar_size(); // 0 small, 1 medium, 2 large
+        let combine = super::system_settings::combine_icons(); // 0 always, 1 when full, 2 never
+        let autohide = super::system_settings::taskbar_autohide();
+        let vertical = matches!(position, 0 | 2);
+
+        // The screen, kept near 16:10 and centred, with room at the bottom for the caption.
+        let (margin, caption) = (22.0, 26.0);
+        let mut screen = Rect { x: area.x + margin, y: area.y + margin, w: area.w - 2.0 * margin, h: area.h - 2.0 * margin - caption };
+        let want = 16.0 / 10.0;
+        if screen.w / screen.h.max(1.0) > want {
+            let w = screen.h * want;
+            screen.x += (screen.w - w) / 2.0;
+            screen.w = w;
+        } else {
+            let h = screen.w / want;
+            screen.y += (screen.h - h) / 2.0;
+            screen.h = h;
+        }
+        if screen.w <= 0.0 || screen.h <= 0.0 {
+            return;
+        }
+
+        // The desktop: a plain surface washed with a soft accent glow up top.
+        fill(frame, palette.window, screen.x, screen.y, screen.w, screen.h, 6.0);
+        fill(frame, palette.selection.alpha(0.16), screen.x, screen.y, screen.w, screen.h * 0.6, 6.0);
+        stroke_inside(frame, screen, 6.0, palette.card_stroke);
+
+        // The room the desktop has once the bar is taken from it.
+        let bar = if autohide { 4.0 } else { match size { 0 => 22.0, 2 => 40.0, _ => 30.0 } };
+        let desk = match position {
+            1 => Rect { x: screen.x, y: screen.y + bar, w: screen.w, h: screen.h - bar },
+            0 => Rect { x: screen.x + bar, y: screen.y, w: screen.w - bar, h: screen.h },
+            2 => Rect { x: screen.x, y: screen.y, w: screen.w - bar, h: screen.h },
+            _ => Rect { x: screen.x, y: screen.y, w: screen.w, h: screen.h - bar },
+        };
+        // Two idle windows resting on the desktop.
+        let pad = (desk.w.min(desk.h) * 0.08).max(6.0);
+        let half = (desk.w - 3.0 * pad) / 2.0;
+        let tall = desk.h - 2.0 * pad;
+        for (i, at) in [desk.x + pad, desk.x + 2.0 * pad + half].into_iter().enumerate() {
+            let top = desk.y + pad + if i == 0 { 0.0 } else { tall * 0.12 };
+            let h = (tall - if i == 0 { 0.0 } else { tall * 0.12 }).min(tall);
+            fill(frame, palette.control, at, top, half, h, 4.0);
+            stroke_inside(frame, Rect { x: at, y: top, w: half, h }, 4.0, palette.card_stroke);
+            fill(frame, palette.selection.alpha(0.5), at + 6.0, top + 6.0, half * 0.4, 4.0, 2.0);
+        }
+
+        // The bar itself along the chosen edge, and the buttons resting in it.
+        let tb = match position {
+            1 => Rect { x: screen.x, y: screen.y, w: screen.w, h: bar },
+            0 => Rect { x: screen.x, y: screen.y, w: bar, h: screen.h },
+            2 => Rect { x: screen.x + screen.w - bar, y: screen.y, w: bar, h: screen.h },
+            _ => Rect { x: screen.x, y: screen.y + screen.h - bar, w: screen.w, h: bar },
+        };
+        fill(frame, palette.window.alpha(0.92), tb.x, tb.y, tb.w, tb.h, if autohide { 0.0 } else { 4.0 });
+        stroke_inside(frame, tb, if autohide { 0.0 } else { 4.0 }, palette.card_stroke);
+
+        if !autohide {
+            let grouped = combine != 2;
+            let cell = if vertical { tb.w } else { tb.h };
+            let icon = (cell * 0.5).min(20.0);
+            let gap = cell * 0.18;
+            let step = if grouped { icon + gap } else { icon * 2.4 + gap };
+            let start = if vertical { tb.x } else { tb.y } + gap;
+            let across = if vertical { tb.w } else { tb.h } - 2.0 * gap;
+            let n = (((across / step).floor() as usize).clamp(1, 8)) - 1;
+            let track = if vertical { tb.x } else { tb.y } + (if vertical { tb.w } else { tb.h }) / 2.0;
+            for i in 0..=n {
+                let at = start + i as f32 * step;
+                let (bx, by, bw, bh) = if vertical {
+                    (at, track - icon / 2.0, if grouped { icon } else { icon * 2.4 }, icon)
+                } else {
+                    (track - icon / 2.0, at, icon, if grouped { icon } else { icon * 2.4 })
+                };
+                // A button's plate, the first (the start) standing apart in the accent.
+                fill(frame, if i == 0 { palette.selection.alpha(0.85) } else { palette.control_on }, bx, by, bw, bh, 3.0);
+                if grouped && i > 0 {
+                    // A small dot marking the running group.
+                    let d = 3.0;
+                    let (cx, cy) = if vertical { (bx + bw / 2.0, by + bh + 2.0) } else { (bx + bw + 2.0, by + bh / 2.0) };
+                    fill(frame, palette.selection.alpha(0.9), cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0);
+                }
+            }
+        }
+
+        // The caption: what the bar is set to, spelled out.
+        let edge = match position {
+            1 => p("顶部", "top"),
+            0 => p("左侧", "left"),
+            2 => p("右侧", "right"),
+            _ => p("底部", "bottom"),
+        };
+        let sizing = match size {
+            0 => p("小", "small"),
+            2 => p("大", "large"),
+            _ => p("标准", "medium"),
+        };
+        let hiding = if autohide { p("，自动隐藏", ", hidden until reached") } else { String::new() };
+        let line = if lang == Lang::Zh {
+            format!("任务栏居{edge}，{sizing}大小{hiding}")
+        } else {
+            format!("The taskbar sits {edge}, {sizing}{hiding}")
+        };
+        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + margin, screen.y + screen.h + 8.0, area.w - 2.0 * margin, Align::Start);
     }
 
     /// How the stage is shown in `area` with a panel `pw` wide (stage DIPs) slid out from `edge`: how large a stage
