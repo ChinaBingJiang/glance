@@ -1100,6 +1100,17 @@ pub(crate) fn set_taskbar_size(value: u32) {
     broadcast_settings("TaskbarSi");
 }
 
+/// Where the taskbar's icons stand: Windows' TaskbarAl number, 0 against the start's corner, 1 in
+/// the middle of the bar (Windows 11's own setting; 1 is what Explorer keeps when it was never told).
+pub(crate) fn taskbar_align() -> u32 {
+    reg_word(HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarAl").unwrap_or(1)
+}
+
+pub(crate) fn set_taskbar_align(value: u32) {
+    reg_write(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarAl", value.clamp(0, 1));
+    broadcast_settings("TaskbarAl");
+}
+
 // ---- Wallpaper ----
 
 /// The wallpapers Windows ships, and those the themes use.

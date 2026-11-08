@@ -109,6 +109,8 @@ const HINT: f32 = 13.0;
 const ROW_GAP: f32 = 8.0;
 /// The line of its own a row of choices with a word on it takes below.
 const CHOICE_LINE: f32 = 40.0;
+/// The room the taskbar's edge is chosen in: four cards of the screen, each with its word under it.
+const POSITION_CARDS: f32 = 100.0;
 /// A slider's track, the room for its value, and its thumb's radius.
 const SLIDER_WIDTH: f32 = 160.0;
 const SLIDER_VALUE: f32 = 44.0;
@@ -1422,6 +1424,8 @@ enum Field {
     CombineIcons,
     /// The taskbar's size.
     TaskbarSize,
+    /// Whether the taskbar's icons stand against the start's corner or in its middle.
+    TaskbarAlign,
     /// How the wallpaper fills the screen.
     WallpaperStyle,
 }
@@ -1909,6 +1913,13 @@ enum Row {
     Disk(u32, String, u64),
 }
 
+/// How wide a 通用 hub preview's column is: a fixed column reads as blank wall in a
+/// window grown large, so past the comfortable least width it grows with the pane,
+/// three parts in four, and keeps its margins at the most.
+fn hub_column(room: f32, least: f32, margin: f32) -> f32 {
+    (room - 2.0 * margin).min((room * 0.75).max(least))
+}
+
 /// How tall a group's name is, above its rows.
 const GROUP: f32 = 28.0;
 /// The room the site's notice's icon takes left of its words: the icon, and as far again as a row's controls are
@@ -2349,6 +2360,9 @@ struct Ui {
     notify_selected: Option<String>,
     /// The privacy capability whose app list is shown, as Windows names it in the consent store.
     privacy_capability: String,
+    /// The choice row whose list of options stands open, and the box that list hangs from.
+    open_dropdown: Option<Field>,
+    dropdown_anchor: Option<Rect>,
     motion: HashMap<String, Transition>,
     /// Thumbs land where they belong without sliding (after relabelling).
     settle_thumbs: bool,
@@ -2658,6 +2672,8 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             audio_selected: None,
             notify_selected: None,
             privacy_capability: "Location".into(),
+            open_dropdown: None,
+            dropdown_anchor: None,
             motion: HashMap::new(),
             settle_thumbs: true,
             by_hand: false,
@@ -3666,6 +3682,7 @@ impl Ui {
                     Row::Switch(Switch::TaskbarAutohide),
                     Row::Switch(Switch::TaskbarSmall),
                     Row::Choice(Field::TaskbarPosition),
+                    Row::Choice(Field::TaskbarAlign),
                     Row::Choice(Field::TaskbarSize),
                     Row::Choice(Field::CombineIcons),
                     Row::Note(pick(
@@ -3922,7 +3939,13 @@ impl Ui {
             self.preview = None;
             self.scroll = 0.0;
             self.scroll_target = 0.0;
+            // The hub's right pane is read from its top again: its scroll goes with the preview.
+            self.hub_scroll = 0.0;
+            self.hub_scroll_target = 0.0;
+            self.hub_tall = 0.0;
             self.drag = None;
+            self.open_dropdown = None;
+            self.dropdown_anchor = None;
             self.raise_more();
         }
         self.next_frame = Instant::now();
@@ -4024,6 +4047,10 @@ impl Ui {
                 Row::Slider(_) => (if after_heading { 8.0 } else { ROW_GAP }, ROW),
                 Row::Skins => (if after_heading { 8.0 } else { ROW_GAP }, SKINS_ROW),
                 Row::Library => (if after_heading { 8.0 } else { ROW_GAP }, self.library_height()),
+                // The taskbar's edge, chosen from cards of the screen; its size and where
+                // its icons stand, from a box that opens a list: a line for their own.
+                Row::Choice(Field::TaskbarPosition) => (if after_heading { 8.0 } else { ROW_GAP }, ROW + POSITION_CARDS),
+                Row::Choice(field) if matches!(field, Field::TaskbarSize | Field::TaskbarAlign) => (if after_heading { 8.0 } else { ROW_GAP }, ROW),
                 // A choice with a word on it: the word above, the choices on
                 // a line of their own.
                 Row::Choice(field) if self.choice_hint(*field).is_some() => {
@@ -4856,6 +4883,11 @@ impl Ui {
                 vec![s("小", "Small"), s("标准", "Medium"), s("大", "Large")],
                 [0u32, 1, 2].iter().position(|&n| n == super::system_settings::taskbar_size()),
             ),
+            Field::TaskbarAlign => (
+                pick(lang, "任务栏图标对齐", "Taskbar icon alignment"),
+                vec![s("靠左", "Left"), s("居中", "Center")],
+                [0u32, 1].iter().position(|&n| n == super::system_settings::taskbar_align()),
+            ),
             Field::WallpaperStyle => (
                 pick(lang, "显示方式", "Choose a fit"),
                 vec![s("填充", "Fill"), s("适合", "Fit"), s("拉伸", "Stretch"), s("居中", "Center"), s("平铺", "Tile")],
@@ -4873,6 +4905,8 @@ impl Ui {
     }
 
     fn choose(&mut self, field: Field, index: usize) {
+        // (A word taken from an open list puts the list away.)
+        self.open_dropdown = None;
         let part = self.previewed();
         let (settings, prefs) = (&mut self.settings, &mut self.prefs);
         match field {
@@ -4917,6 +4951,7 @@ impl Ui {
             Field::TaskbarPosition => super::system_settings::set_taskbar_position([3, 1, 0, 2][index]),
             Field::CombineIcons => super::system_settings::set_combine_icons([0, 1, 2][index]),
             Field::TaskbarSize => super::system_settings::set_taskbar_size([0, 1, 2][index]),
+            Field::TaskbarAlign => super::system_settings::set_taskbar_align([0, 1][index]),
             Field::WallpaperStyle => super::system_settings::set_wallpaper_style([10, 6, 2, 0, 0][index]),
             // (Slid rather than chosen: see `set_slider`.)
             Field::ScreenOff | Field::Sleep | Field::KeyDelay | Field::KeyRate | Field::MouseSpeed | Field::TextSize | Field::CursorSize => {}
@@ -6084,6 +6119,10 @@ impl Ui {
 
     fn release(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
+        // A click that lands off an open list takes the list down with it.
+        if self.open_dropdown.is_some() && !matches!(self.hovered(), Some(Target::Choice(f, _)) if self.open_dropdown == Some(f)) {
+            self.open_dropdown = None;
+        }
         if self.release_phone(x, y) {
             return;
         }
@@ -6120,7 +6159,16 @@ impl Ui {
                 .into();
                 self.save();
             }
-            Target::Choice(field, index) => self.choose(field, index),
+            Target::Choice(field, index) => {
+                // A dropdown's box pressed on the word it already reads opens or shuts its
+                // list rather than setting anything; a word pressed in the list sets it and shuts.
+                if matches!(field, Field::TaskbarSize | Field::TaskbarAlign) && self.choices(field).2 == Some(index) {
+                    self.open_dropdown = if self.open_dropdown == Some(field) { None } else { Some(field) };
+                    self.next_frame = Instant::now();
+                } else {
+                    self.choose(field, index);
+                }
+            }
             // (Carried, or pressed and let go: see `put_down`.)
             Target::Library(_) | Target::Chip(..) => {}
             Target::View(_) | Target::Same | Target::Zone(..) | Target::Unplace(..) => {
@@ -6687,8 +6735,9 @@ impl Ui {
             return;
         }
         if !(NAV..NAV + self.pane()).contains(&x) {
-            // Past the list, on the 通用 hub: its right pane is what moves.
-            if self.page == Page::System && self.preview.is_some() {
+            // Past the list, on the 通用 hub: its right pane is what moves, whether a sub-item's
+            // cards or the landing's column of them.
+            if self.page == Page::System {
                 let most = self.hub_most();
                 if most > 0.0 {
                     self.hub_scroll_target = (self.hub_scroll_target - delta as f32 / 120.0 * WHEEL).clamp(0.0, most);
@@ -7050,6 +7099,8 @@ impl Ui {
         let lang = self.lang;
         let left = NAV + PAD_SIDE;
         let width = self.cards();
+        // (The open list hangs from the box as it is drawn; gone with it if the box is not drawn at all.)
+        self.dropdown_anchor = None;
         let scroll = self.scroll;
         let hovered = self.hovered_now.clone();
         let over = match hovered {
@@ -7396,7 +7447,16 @@ impl Ui {
                     card(frame, palette, left, y, width, row_height, palette.card);
                     let (name, options, chosen) = self.choices(field);
                     let right = left + width - ROW_SIDE;
-                    match self.choice_hint(field) {
+                    // The taskbar's edge is chosen from four cards of the screen, as Windows'
+                    // own settings show it; its size and where its icons stand, from a box
+                    // that opens a list.
+                    if field == Field::TaskbarPosition {
+                        text_centred(frame, name, label, palette.text, left + ROW_SIDE, y + ROW / 2.0, width - 2.0 * ROW_SIDE, Align::Start);
+                        self.position_cards(frame, palette, field, &options, chosen, left + ROW_SIDE, y + ROW, width - 2.0 * ROW_SIDE, &hovered);
+                    } else if matches!(field, Field::TaskbarSize | Field::TaskbarAlign) {
+                        self.dropdown_row(frame, palette, field, name, &options, chosen, left, y, width, row_height, label, hint, now, &hovered);
+                    } else {
+                        match self.choice_hint(field) {
                         Some(word) if self.stacked(&options) => {
                             let lines = self.choice_lines(&options, self.choices_room()).len() as f32;
                             let words = row_height - CHOICE_LINE * lines;
@@ -7418,6 +7478,7 @@ impl Ui {
                             let words = row_height - CHOICE_LINE * lines;
                             text_centred(frame, name, label, palette.text, left + ROW_SIDE, y + words / 2.0, width - 2.0 * ROW_SIDE, Align::Start);
                             self.segmented(frame, palette, field, &options, chosen, true, right, y + words + CHOICE_LINE / 2.0 - 8.0, self.choices_room(), now, &hovered);
+                        }
                         }
                     }
                 }
@@ -7703,6 +7764,26 @@ impl Ui {
             let y = drag.pointer - drag.grab - scroll;
             self.module_row(frame, palette, &id, left, y, width, row_height, row_height, now, &hovered, true);
         }
+        // An open dropdown's list passes over the rows under it, its words each to be
+        // pressed; what lay beneath gives its place to none of them.
+        if let (Some(field), Some(at)) = (self.open_dropdown, self.dropdown_anchor) {
+            let (_, options, chosen) = self.choices(field);
+            let row_h = 34.0;
+            let menu = Rect { x: at.x, y: at.y + at.h + 4.0, w: at.w, h: row_h * options.len() as f32 + 8.0 };
+            self.targets.retain(|(_, t)| !matches!(t, Target::Choice(f, _) if *f == field));
+            let _ = skins::shadows(frame, &[(menu, 6.0)], &[Shadow { y: 2.0, blur: 12.0, spread: 0.0, color: Color::hex(0x000000, 0.16) }]);
+            fill(frame, palette.window, menu.x, menu.y, menu.w, menu.h, 6.0);
+            stroke_inside(frame, menu, 6.0, palette.card_stroke);
+            let font = Font::new(Family::Segoe, 13.0, 400.0);
+            for (i, option) in options.iter().enumerate() {
+                let r = Rect { x: menu.x + 4.0, y: menu.y + 4.0 + i as f32 * row_h, w: menu.w - 8.0, h: row_h };
+                if chosen == Some(i) || hovered.as_ref() == Some(&Target::Choice(field, i)) {
+                    fill(frame, palette.hover, r.x, r.y, r.w, r.h, 4.0);
+                }
+                text_centred(frame, option, font, palette.text, r.x + 12.0, r.y + row_h / 2.0, r.w - 24.0, Align::Start);
+                self.targets.push((r, Target::Choice(field, i)));
+            }
+        }
         // The focus, shown once the keyboard is in use.
         if self.keyboard {
             if let Some(focus) = &self.focus {
@@ -7873,6 +7954,69 @@ impl Ui {
             self.targets.push((rect, target));
         }
         rect.x
+    }
+
+    /// A choice shown as Windows 11 shows it: its name, and on the right a box reading
+    /// the chosen word, with a chevron that opens a list of them all (see `open_dropdown`).
+    #[allow(clippy::too_many_arguments)]
+    fn dropdown_row(&mut self, frame: &Frame, palette: &Palette, field: Field, name: &'static str, options: &[String], chosen: Option<usize>, left: f32, y: f32, width: f32, row_height: f32, label: Font, hint: Font, now: Instant, hovered: &Option<Target>) {
+        let _ = (hint, now);
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let cy = y + row_height / 2.0;
+        let widest = options.iter().map(|o| frame.gfx.measure(o, font)).fold(0.0f32, f32::max);
+        let bw = widest + 44.0;
+        let box_x = left + width - ROW_SIDE - bw;
+        text_centred(frame, name, label, palette.text, left + ROW_SIDE, cy, (box_x - 16.0 - left - ROW_SIDE).max(80.0), Align::Start);
+        let open = self.open_dropdown == Some(field);
+        let rect = Rect { x: box_x, y: cy - 16.0, w: bw, h: 32.0 };
+        let lit = open || *hovered == Some(Target::Choice(field, chosen.unwrap_or(0)));
+        fill(frame, if open { palette.hover } else { palette.control }, rect.x, rect.y, rect.w, rect.h, 6.0);
+        stroke_inside(frame, rect, 6.0, if lit { palette.selection } else { palette.card_stroke });
+        if let Some(i) = chosen.filter(|i| *i < options.len()) {
+            text_centred(frame, &options[i], font, palette.text, rect.x + 12.0, cy, rect.w - 36.0, Align::Start);
+        }
+        frame.icon(Icon::ChevronDown, Point { x: rect.x + rect.w - 16.0, y: cy }, CHEVRON, palette.text2);
+        // (The box presses as a choice of the word it already reads: `activate` opens the list on it.)
+        self.targets.push((rect, Target::Choice(field, chosen.unwrap_or(0))));
+        if open {
+            self.dropdown_anchor = Some(rect);
+        }
+    }
+
+    /// The taskbar's edge as Windows 11 shows it: four little screens each wearing the bar
+    /// along its edge, the chosen one ringed in the accent, all four to be pressed.
+    #[allow(clippy::too_many_arguments)]
+    fn position_cards(&mut self, frame: &Frame, palette: &Palette, field: Field, options: &[String], chosen: Option<usize>, x: f32, top: f32, room: f32, hovered: &Option<Target>) {
+        let font = Font::new(Family::Segoe, 13.0, 400.0);
+        let gap = 10.0;
+        let card_w = ((room - 3.0 * gap) / 4.0).max(40.0);
+        let screen_h = card_w * 0.6;
+        let thick = (screen_h * 0.16).max(4.0);
+        for (i, option) in options.iter().enumerate() {
+            let cx = x + i as f32 * (card_w + gap);
+            let target = Target::Choice(field, i);
+            let lit = chosen == Some(i);
+            let hover = hovered.as_ref() == Some(&target);
+            // A little screen: the desktop washed in the accent, the bar along the edge it stands on.
+            fill(frame, palette.window, cx, top, card_w, screen_h, 4.0);
+            fill(frame, palette.selection.alpha(0.14), cx, top, card_w, screen_h * 0.55, 4.0);
+            let bar = match i {
+                1 => Rect { x: cx, y: top, w: card_w, h: thick },
+                2 => Rect { x: cx, y: top, w: thick, h: screen_h },
+                3 => Rect { x: cx + card_w - thick, y: top, w: thick, h: screen_h },
+                _ => Rect { x: cx, y: top + screen_h - thick, w: card_w, h: thick },
+            };
+            fill(frame, if lit { palette.selection } else { palette.control_on }, bar.x, bar.y, bar.w, bar.h, 2.0);
+            if hover && !lit {
+                fill(frame, palette.hover, cx, top, card_w, screen_h, 4.0);
+            }
+            stroke_inside(frame, Rect { x: cx, y: top, w: card_w, h: screen_h }, 4.0, palette.card_stroke);
+            if lit {
+                stroke_outside(frame, Rect { x: cx, y: top, w: card_w, h: screen_h }, 4.0, palette.selection, 2.0);
+            }
+            text_middle(frame, option, font, if lit { palette.text } else { palette.text2 }, cx + card_w / 2.0, top + screen_h + 13.0);
+            self.targets.push((Rect { x: cx, y: top, w: card_w, h: screen_h + 23.0 }, target));
+        }
     }
 
     /// A row of options with one thumb that slides under the chosen one,
@@ -8427,10 +8571,12 @@ impl Ui {
                     let past = (self.drawn + self.hanging - (area.y + area.h)).max(0.0);
                     self.hub_tall = area.h + past;
                     self.hub_shifted(frame, palette, area, painted, scroll);
+                    return None;
                 }
-                None => self.paint_hub_plain(frame, palette, area),
+                // With none picked, the hub opens on the panel's components themselves: its cards laid
+                // clean as a grid over the room, the readings running, with no desktop behind them.
+                None => return self.panel_grid(frame, palette, area),
             }
-            return None;
         }
         // (The panel's and the music's previews frame what of the screen they show: see `shown_of`.)
         let overlay = self.page == Page::Monitor && self.tab == Tab::Overlay;
@@ -9244,7 +9390,7 @@ impl Ui {
         let font = Font::new(Family::Segoe, 13.0, 400.0);
         let hint = Font::new(Family::Segoe, HINT, 400.0);
         let margin = 20.0;
-        let col = (area.w - 2.0 * margin).min(560.0);
+        let col = hub_column(area.w, 560.0, margin);
         let x = area.x + (area.w - col) / 2.0;
         // The fixes as last read, newest first; nothing landed yet while the background read runs.
         let read = crate::sys::patches_snapshot();
@@ -9926,25 +10072,6 @@ impl Ui {
         }
     }
 
-    /// The hub with none picked: the machine's mark, and a word to pick one.
-    fn paint_hub_plain(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
-        let lang = self.lang;
-        let cx = area.x + area.w / 2.0;
-        let cy = area.y + area.h / 2.0;
-        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
-        stroke_inside(frame, area, 8.0, palette.card_stroke);
-        frame.icon(Icon::Settings, Point { x: cx, y: cy - 26.0 }, 44.0, palette.text3);
-        text_middle(frame, pick(lang, "通用", "General"), Font::new(Family::Segoe, 16.0, 600.0), palette.text, cx, cy + 16.0);
-        text_middle(
-            frame,
-            pick(lang, "从左边选一项，它的详情显示在这里", "Pick one at the left; its details show here"),
-            Font::new(Family::Segoe, HINT, 400.0),
-            palette.text2,
-            cx,
-            cy + 40.0,
-        );
-    }
-
     /// 关于本机 as the hub shows it: the machine named over its own facts.
     fn paint_about_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
         let lang = self.lang;
@@ -9956,7 +10083,7 @@ impl Ui {
         let margin = 20.0;
         // The facts are read whole rather than cut short, so the column is let run wide; and the rows
         // are stood further apart than the hub's usual, to give the machine's telling room to breathe.
-        let col = (area.w - 2.0 * margin).min(560.0);
+        let col = hub_column(area.w, 560.0, margin);
         let line = 44.0;
         let x = area.x + (area.w - col) / 2.0;
         super::about::draw_machine(frame, area.x + area.w / 2.0, area.y + margin + 34.0, palette.text2, palette.card, crate::smbios::chassis_laptop());
@@ -9991,7 +10118,7 @@ impl Ui {
         fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
         stroke_inside(frame, area, 8.0, palette.card_stroke);
         let margin = 20.0;
-        let col = (area.w - 2.0 * margin).min(420.0);
+        let col = hub_column(area.w, 420.0, margin);
         let x = area.x + (area.w - col) / 2.0;
 
         // The hour the machine stands at, its zone named, the shift it keeps from
@@ -10378,19 +10505,22 @@ impl Ui {
         }
     }
 
-    /// The desktop and taskbar page's preview: a screen with its taskbar drawn
-    /// on the chosen edge, at the chosen size, its buttons grouped as chosen,
-    /// and reduced to a thin strip when it hides.
+    /// The desktop and taskbar page's preview: a screen as Windows 11 wears it, the
+    /// taskbar along its chosen edge with the start, a row of icons, a tray and the
+    /// clock — centred or to the corner, grouped or apart, at the chosen size, and
+    /// reduced to a thin strip when it hides.
     fn paint_desktop_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
         let lang = self.lang;
         let p = |zh, en| pick(lang, zh, en).to_string();
         fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
         stroke_inside(frame, area, 8.0, palette.card_stroke);
 
-        let position = super::system_settings::taskbar_position(); // 0 left, 1 top, 2 right, 3 bottom
-        let size = super::system_settings::taskbar_size(); // 0 small, 1 medium, 2 large
-        let combine = super::system_settings::combine_icons(); // 0 always, 1 when full, 2 never
-        let autohide = super::system_settings::taskbar_autohide();
+        use super::system_settings as sys;
+        let position = sys::taskbar_position(); // 0 left, 1 top, 2 right, 3 bottom
+        let size = sys::taskbar_size(); // 0 small, 1 medium, 2 large
+        let combine = sys::combine_icons(); // 0 always, 1 when full, 2 never
+        let autohide = sys::taskbar_autohide();
+        let align = sys::taskbar_align(); // 0 to the corner, 1 in the middle
         let vertical = matches!(position, 0 | 2);
 
         // The screen, kept near 16:10 and centred, with room at the bottom for the caption.
@@ -10415,8 +10545,9 @@ impl Ui {
         fill(frame, palette.selection.alpha(0.16), screen.x, screen.y, screen.w, screen.h * 0.6, 6.0);
         stroke_inside(frame, screen, 6.0, palette.card_stroke);
 
-        // The room the desktop has once the bar is taken from it.
-        let bar = if autohide { 4.0 } else { match size { 0 => 22.0, 2 => 40.0, _ => 30.0 } };
+        // The bar's thickness follows the chosen size; its icons fill most of it.
+        let bar = if autohide { 4.0 } else { screen.h * match size { 0 => 0.062, 2 => 0.1, _ => 0.08 } };
+        let icon = bar * 0.52;
         let desk = match position {
             1 => Rect { x: screen.x, y: screen.y + bar, w: screen.w, h: screen.h - bar },
             0 => Rect { x: screen.x + bar, y: screen.y, w: screen.w - bar, h: screen.h },
@@ -10435,41 +10566,125 @@ impl Ui {
             fill(frame, palette.selection.alpha(0.5), at + 6.0, top + 6.0, half * 0.4, 4.0, 2.0);
         }
 
-        // The bar itself along the chosen edge, and the buttons resting in it.
+        // The bar: an acrylic sheet along its edge, a hairline toward the desktop.
         let tb = match position {
             1 => Rect { x: screen.x, y: screen.y, w: screen.w, h: bar },
             0 => Rect { x: screen.x, y: screen.y, w: bar, h: screen.h },
             2 => Rect { x: screen.x + screen.w - bar, y: screen.y, w: bar, h: screen.h },
             _ => Rect { x: screen.x, y: screen.y + screen.h - bar, w: screen.w, h: bar },
         };
-        fill(frame, palette.window.alpha(0.92), tb.x, tb.y, tb.w, tb.h, if autohide { 0.0 } else { 4.0 });
+        fill(frame, mix(palette.window, palette.card, 0.45).alpha(0.92), tb.x, tb.y, tb.w, tb.h, if autohide { 0.0 } else { 4.0 });
         stroke_inside(frame, tb, if autohide { 0.0 } else { 4.0 }, palette.card_stroke);
 
         if !autohide {
-            let grouped = combine != 2;
-            let cell = if vertical { tb.w } else { tb.h };
-            let icon = (cell * 0.5).min(20.0);
-            let gap = cell * 0.18;
-            let step = if grouped { icon + gap } else { icon * 2.4 + gap };
-            let start = if vertical { tb.x } else { tb.y } + gap;
-            let across = if vertical { tb.w } else { tb.h } - 2.0 * gap;
-            let n = (((across / step).floor() as usize).clamp(1, 8)) - 1;
-            let track = if vertical { tb.x } else { tb.y } + (if vertical { tb.w } else { tb.h }) / 2.0;
-            for i in 0..=n {
-                let at = start + i as f32 * step;
-                let (bx, by, bw, bh) = if vertical {
-                    (at, track - icon / 2.0, if grouped { icon } else { icon * 2.4 }, icon)
-                } else {
-                    (track - icon / 2.0, at, icon, if grouped { icon } else { icon * 2.4 })
-                };
-                // A button's plate, the first (the start) standing apart in the accent.
-                fill(frame, if i == 0 { palette.selection.alpha(0.85) } else { palette.control_on }, bx, by, bw, bh, 3.0);
-                if grouped && i > 0 {
-                    // A small dot marking the running group.
-                    let d = 3.0;
-                    let (cx, cy) = if vertical { (bx + bw / 2.0, by + bh + 2.0) } else { (bx + bw + 2.0, by + bh / 2.0) };
-                    fill(frame, palette.selection.alpha(0.9), cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0);
+            // The clock the machine keeps, and the apps resting on the bar: the explorer's
+            // folder, a browser, a player, two others; all but the first are running.
+            let clock = sys::wall_clock();
+            let mut bits = clock.split_whitespace();
+            let day: String = bits.next().unwrap_or("").replace('-', "/");
+            let hhmm: String = bits.next().unwrap_or("").chars().take(5).collect();
+            let apps: [(u32, bool); 5] = [(0xE3B04B, false), (0x3E8FD0, true), (0x8F6CD0, true), (0x53B582, true), (0xD06060, true)];
+            // The start's four panes, in the accent, as the logo Windows wears.
+            let logo = |frame: &Frame, cx: f32, cy: f32, q: f32, ink: Color| {
+                let (side, gap) = (q * 0.44, q * 0.12);
+                for (dx, dy) in [(0.0f32, 0.0f32), (side + gap, 0.0), (0.0, side + gap), (side + gap, side + gap)] {
+                    fill(frame, ink, cx - q / 2.0 + dx, cy - q / 2.0 + dy, side, side, 1.0);
                 }
+            };
+            let gap = icon * 0.5;
+            if !vertical {
+                let cy = tb.y + tb.h / 2.0;
+                let bw = if combine == 2 { icon * 2.4 } else { icon };
+                let group_w = (icon + gap) * 2.0 + bw * apps.len() as f32 + gap * (apps.len() as f32 - 1.0);
+                // The tray, at the far end: the clock in two lines, its glyphs before it.
+                let cfont = Font::new(Family::Segoe, (bar * 0.25).max(6.0), 400.0);
+                let dfone = Font::new(Family::Segoe, (bar * 0.21).max(5.5), 400.0);
+                let tw = frame.gfx.measure(&hhmm, cfont).max(frame.gfx.measure(&day, dfone));
+                let tray_w = tw + bar * 2.4 + 10.0;
+                let mut gx = if align == 1 { tb.x + (tb.w - tray_w) / 2.0 - group_w / 2.0 } else { tb.x + bar * 0.22 };
+                gx = gx.max(tb.x + 3.0).min(tb.x + tb.w - tray_w - group_w - 3.0).max(tb.x + 3.0);
+                logo(frame, gx + icon / 2.0, cy, icon * 0.72, palette.selection);
+                // A search glass: a ring and its handle.
+                let sx = gx + icon + gap + icon / 2.0;
+                Canvas::fill_circle(frame, palette.text2, Point { x: sx, y: cy - 1.0 }, icon * 0.24);
+                Canvas::fill_circle(frame, mix(palette.window, palette.card, 0.45), Point { x: sx, y: cy - 1.0 }, icon * 0.14);
+                fill(frame, palette.text2, sx + icon * 0.16, cy + icon * 0.12, icon * 0.2, 1.5, 0.8);
+                let mut ax = gx + (icon + gap) * 2.0;
+                for (i, (hue, running)) in apps.into_iter().enumerate() {
+                    let ink = Color::hex(hue, 1.0);
+                    let (bx, s) = (ax + (bw - icon) / 2.0, icon);
+                    // The explorer as a folder, the browser as a circle, the rest as plates.
+                    if i == 0 {
+                        fill(frame, ink, ax + (bw - s) / 2.0, cy - s * 0.3, s, s * 0.66, 1.5);
+                        fill(frame, ink.alpha(0.85), ax + (bw - s) / 2.0, cy - s * 0.48, s * 0.45, s * 0.22, 1.0);
+                    } else if i == 1 {
+                        Canvas::fill_circle(frame, ink, Point { x: bx + s / 2.0, y: cy }, s * 0.5);
+                    } else {
+                        fill(frame, ink, bx, cy - s / 2.0, s, s, s * 0.22);
+                        fill(frame, Color::hex(0xFFFFFF, 0.85), bx + s * 0.3, cy + s * 0.16, s * 0.4, 1.5, 0.8);
+                    }
+                    if combine == 2 && i > 0 {
+                        // Buttons not combined wear a hairline between them.
+                        fill(frame, palette.text3.alpha(0.5), ax - gap / 2.0, cy - s * 0.55, 1.0, s * 1.1, 0.0);
+                    }
+                    if running {
+                        // The running mark: a pill of the accent under its button.
+                        let pw = if combine == 2 { bw * 0.66 } else { icon * 0.55 };
+                        fill(frame, palette.selection, ax + (bw - pw) / 2.0, tb.y + tb.h - 4.0, pw, 2.0, 1.0);
+                    }
+                    ax += bw + gap;
+                }
+                // The tray's glyphs, then the clock to the corner.
+                let mut tx = tb.x + tb.w - 8.0 - tw;
+                text_middle(frame, &hhmm, cfont, palette.text, tx + tw / 2.0, cy - bar * 0.13);
+                text_middle(frame, &day, dfone, palette.text, tx + tw / 2.0, cy + bar * 0.16);
+                tx -= bar * 0.9;
+                // The battery: a shell, its charge, and a nub.
+                let (bwh, bhh) = (bar * 0.46, bar * 0.26);
+                stroke_inside(frame, Rect { x: tx - bwh, y: cy - bhh / 2.0, w: bwh, h: bhh }, 2.0, palette.text2);
+                fill(frame, palette.text2, tx - bwh + 1.5, cy - bhh / 2.0 + 1.5, (bwh - 3.0) * 0.62, bhh - 3.0, 1.0);
+                fill(frame, palette.text2, tx + 0.5, cy - 1.0, 1.5, 2.0, 0.8);
+                tx -= bar * 0.7;
+                // The speaker: a body and a wave.
+                fill(frame, palette.text2, tx - bar * 0.2, cy - bar * 0.1, bar * 0.14, bar * 0.2, 1.0);
+                Canvas::fill_circle(frame, palette.text2, Point { x: tx - bar * 0.05, y: cy }, bar * 0.09);
+                tx -= bar * 0.7;
+                // The signal: three bars, taller as they go.
+                for (i, h) in [0.22, 0.36, 0.5].into_iter().enumerate() {
+                    fill(frame, palette.text2, tx - (3.0 - i as f32) * (bar * 0.12), cy + bar * 0.25 - bar * h, bar * 0.08, bar * h, 1.0);
+                }
+            } else {
+                // A bar stood on end: the start at its head, the tray at its foot, the
+                // icons in a file between, kept together or centred as the bar is told.
+                let cx = tb.x + tb.w / 2.0;
+                let tray_h = bar * 2.6;
+                let group_h = (icon + gap) * 2.0 + (icon + gap) * apps.len() as f32;
+                let mut ay = if align == 1 { tb.y + (tb.h - tray_h) / 2.0 - group_h / 2.0 } else { tb.y + bar * 0.25 };
+                ay = ay.max(tb.y + 3.0).min((tb.y + tb.h - tray_h - group_h - 3.0).max(tb.y + 3.0));
+                logo(frame, cx, ay + icon / 2.0, icon * 0.72, palette.selection);
+                ay += icon + gap;
+                let sx = cx;
+                Canvas::fill_circle(frame, palette.text2, Point { x: sx, y: ay + icon / 2.0 - 1.0 }, icon * 0.24);
+                Canvas::fill_circle(frame, mix(palette.window, palette.card, 0.45), Point { x: sx, y: ay + icon / 2.0 - 1.0 }, icon * 0.14);
+                ay += icon + gap;
+                let mark = if position == 0 { tb.x + tb.w - 3.0 } else { tb.x + 1.0 };
+                for (_i, (hue, running)) in apps.into_iter().enumerate() {
+                    let ink = Color::hex(hue, 1.0);
+                    let s = icon;
+                    fill(frame, ink, cx - s / 2.0, ay, s, s, s * 0.22);
+                    if running {
+                        // The running mark stood on end against the desktop's side of the bar.
+                        fill(frame, palette.selection, mark, ay + (s - icon * 0.55) / 2.0, 2.0, icon * 0.55, 1.0);
+                    }
+                    ay += s + gap;
+                }
+                // The tray at the foot: the clock in two lines under a battery dot.
+                let cfont = Font::new(Family::Segoe, (bar * 0.24).max(5.5), 400.0);
+                let dfone = Font::new(Family::Segoe, (bar * 0.2).max(5.0), 400.0);
+                let foot = tb.y + tb.h - 6.0;
+                text_middle(frame, &hhmm, cfont, palette.text, cx, foot - bar * 0.3);
+                text_middle(frame, &day, dfone, palette.text, cx, foot - bar * 0.04);
+                fill(frame, palette.text2, cx - bar * 0.2, foot - bar * 1.05, bar * 0.4, bar * 0.2, 1.5);
             }
         }
 
@@ -10481,15 +10696,16 @@ impl Ui {
             _ => p("底部", "bottom"),
         };
         let sizing = match size {
-            0 => p("小", "small"),
-            2 => p("大", "large"),
+            0 => p("小号", "small"),
+            2 => p("大号", "large"),
             _ => p("标准", "medium"),
         };
-        let hiding = if autohide { p("，自动隐藏", ", hidden until reached") } else { String::new() };
+        let alignment = if align == 0 { p("图标靠左", "icons to the left") } else { p("图标居中", "icons centred") };
+        let hiding = if autohide { p(" · 自动隐藏", " · hidden until reached") } else { String::new() };
         let line = if lang == Lang::Zh {
-            format!("任务栏居{edge}，{sizing}大小{hiding}")
+            format!("任务栏居{edge} · {sizing} · {alignment}{hiding}")
         } else {
-            format!("The taskbar sits {edge}, {sizing}{hiding}")
+            format!("The taskbar sits {edge}, {sizing}, {alignment}{hiding}")
         };
         text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + margin, screen.y + screen.h + 8.0, area.w - 2.0 * margin, Align::Start);
     }
@@ -10712,6 +10928,58 @@ impl Ui {
             Err(error) => frame.fail(error),
         }
         staged(layout.plot_width(&theme, &lanes).map(|width| width * self.scale * zoom * k / prefs.chart_seconds as f32))
+    }
+
+    /// The hub's landing: the panel's own components — its lanes, the readings' cards — drawn clean as a grid filling
+    /// `area`, with no desktop behind them and none slid to a screen edge. The same cards the live panel shows, laid
+    /// out to the room the preview has and drawn on its skin as that skin draws its cards.
+    fn panel_grid(&mut self, frame: &Frame, palette: &Palette, area: Rect) -> Option<f32> {
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        stroke_inside(frame, area, 8.0, palette.card_stroke);
+        let lang = self.lang;
+        let app = crate::app();
+        // Held while the cards are drawn; the sampler waits that long.
+        let history = app.controller.history.read().unwrap();
+        let samples = crate::panel::contiguous(&history);
+        if samples.is_empty() {
+            return None;
+        }
+        let skin = Skin::named(&self.settings.skin);
+        let prefs = self.prefs.clone().holding(self.previewed());
+        // The skin drawn on no desktop: light or dark as the setting says, not as a backdrop behind it.
+        let dark = theme::is_dark(prefs.theme, None);
+        let look = Theme::new(skin, dark);
+        let interval = self.settings.interval_ms as f64;
+        let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0;
+        let pen = wall - interval - PEN_LAG_MS;
+        let seen = app.controller.seen.lock().unwrap().clone();
+        let scene = Scene { music_apart: false, hint: None, thumbs: &crate::ui::view::RESTING, info: &app.info(), prefs: &prefs, theme: &look, lang, history: samples, seen: &seen, pen_ms: pen, scrolls: crate::ui::view::Scrolls::default(), tab: crate::ui::view::Tab::Shelf, hover: None, pinned: false, overlay: app.controller.overlay_wanted(), buttons: true, newer: update::available().is_some(), settings_lit: None };
+        let lanes = view::lanes(&scene);
+        let heights: Vec<f32> = lanes.iter().map(|lane| lane.height(&look)).collect();
+        if heights.is_empty() {
+            return None;
+        }
+        // One card to a row, each as wide as the room. The column of cards is as tall as it needs to be; what
+        // reaches past the pane's bottom is scrolled through, as the hub's other panes are.
+        let base = view::Layout::with_columns(heights, 1, &look);
+        let extra = (area.w - base.width()).max(0.0);
+        let layout = base.stretched((extra, 0.0));
+        let scroll = self.hub_scroll.min(self.hub_most());
+        let picture = render::Picture { scene: &scene, lanes: &lanes, layout: &layout, small: None, size: (layout.width(), layout.height()), at: (0.0, 0.0), edge: None, backdrop: None, frost: 0.0, rough: false };
+        let local = Matrix3x2::translation(area.x, area.y - scroll);
+        let painted = self.targets.len();
+        unsafe { frame.dc.PushAxisAlignedClip(&rect(area.x, area.y, area.w, area.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let drawn = self.layers.layers.draw(frame, &picture, local, self.scale);
+        unsafe { frame.dc.PopAxisAlignedClip() };
+        match drawn {
+            Ok(drawn) if drawn.grounded => self.gfx.clear_caches(),
+            Ok(_) => {}
+            Err(error) => frame.fail(error),
+        }
+        // How far the row of cards reaches past the pane's bottom: that is what the pane may be scrolled through.
+        self.hub_tall = area.h + (layout.height() - area.h).max(0.0);
+        self.hub_shifted(frame, palette, area, painted, scroll);
+        layout.plot_width(&look, &lanes).map(|width| width * self.scale / prefs.chart_seconds as f32)
     }
 
     /// The stage's desktop made a bitmap for a panel's `zoom` (a zoomed panel's units shrink it), where it is not yet.
