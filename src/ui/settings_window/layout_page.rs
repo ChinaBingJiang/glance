@@ -90,11 +90,9 @@ pub(super) fn part_icon(part: Part) -> Icon {
 }
 
 /// The two doors that stand always on, apart from the edge components: the dock's row of icons and the
-/// launchpad's page. Not dragged anywhere — their tile turns to their page instead.
-const DOORS: [(Icon, &str, &str, Page); 2] = [
-    (Icon::ArrowDownToLine, "Dock", "Dock", Page::Dock),
-    (Icon::Grid3x3, "启动台", "Launchpad", Page::Launchpad),
-];
+/// launchpad's page. Not dragged anywhere — their tile turns to their page instead. Their pictures are
+/// named by the page they open (see `paint_library`).
+const DOORS: [(&str, &str, Page); 2] = [("Dock", "Dock", Page::Dock), ("启动台", "Launchpad", Page::Launchpad)];
 
 /// How the library lays its tiles in `room`: how many side by side, how wide each, and how many
 /// rows the components and the doors together make — as many as fit a row at `TILE_MIN`.
@@ -194,17 +192,33 @@ impl Ui {
             text_centred(frame, part_word(part, self.lang), hint, palette.text2, r.x + TILE_PAD + 2.0, below + 30.0, r.w - 2.0 * TILE_PAD, Align::Start);
             self.targets.push((r, target));
         }
-        for (index, (icon, zh, en, page)) in DOORS.into_iter().enumerate() {
+        for (index, (zh, en, page)) in DOORS.into_iter().enumerate() {
             let r = place(PARTS.len() + index);
             let target = Target::Nav(page);
             fill(frame, if hovered.as_ref() == Some(&target) { palette.control_on } else { palette.control }, r.x, r.y, r.w, r.h, 8.0);
             stroke_inside(frame, r, 8.0, palette.card_stroke);
-            // No picture of the desktop in these: what they show lives on the screen itself, so the tile carries
-            // their mark — the page's own icon in a disc — over the room a picture would have taken.
+            // Its picture, the same way the components' are made: the desktop over the wallpaper, and what stands
+            // always on drawn on it small — the dock's row, or the launchpad's page of tiles — by the hand that
+            // paints those pages' own previews (see `dock_on`, `launchpad_on`).
             let picture = Rect { x: r.x + TILE_PAD, y: r.y + TILE_PAD, w: r.w - 2.0 * TILE_PAD, h: TILE_PICTURE };
-            let (cx, cy) = (picture.x + picture.w / 2.0, picture.y + picture.h / 2.0);
-            fill(frame, palette.switch_off, cx - 26.0, cy - 26.0, 52.0, 52.0, 26.0);
-            frame.icon(icon, Point { x: cx, y: cy }, 26.0, palette.text);
+            let (sw, sh) = self.stage.size;
+            let cover = (picture.w / sw).max(picture.h / sh);
+            let held = self.stage.bitmap.as_ref().map_or(1.0, |(key, _)| f32::from_bits(*key));
+            self.stage_picture(frame, picture, 8.0, (picture.x + (picture.w - sw * cover) / 2.0, picture.y + (picture.h - sh * cover) / 2.0), cover, held);
+            unsafe { frame.dc.PushAxisAlignedClip(&rect(picture.x, picture.y, picture.w, picture.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+            let inside = Rect { x: picture.x + TILE_ROOM, y: picture.y + TILE_ROOM, w: picture.w - 2.0 * TILE_ROOM, h: picture.h - 2.0 * TILE_ROOM };
+            let fit = (inside.w / sw).min(inside.h / sh);
+            let mini = Rect { x: inside.x + (inside.w - sw * fit) / 2.0, y: inside.y + (inside.h - sh * fit) / 2.0, w: sw * fit, h: sh * fit };
+            // (The dock only as it stands on: with it turned off there is no row to show, and the desktop is left be.)
+            if page == Page::Dock {
+                if self.settings.dock.on {
+                    let dock = self.settings.dock.clone();
+                    self.dock_on(frame, &dock, mini);
+                }
+            } else {
+                self.launchpad_on(frame, mini);
+            }
+            unsafe { frame.dc.PopAxisAlignedClip() };
             let below = picture.y + picture.h + 8.0;
             let name = pick(self.lang, zh, en);
             let word = if page == Page::Dock {
