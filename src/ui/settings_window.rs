@@ -111,6 +111,16 @@ const ROW_GAP: f32 = 8.0;
 const CHOICE_LINE: f32 = 40.0;
 /// The room the taskbar's edge is chosen in: four cards of the screen, each with its word under it.
 const POSITION_CARDS: f32 = 100.0;
+/// The display's resolution cards: how little width one may be given (as many as stand in the pane's
+/// room are laid side by side, the rest on rows under it), how tall each picture is, the room between
+/// a row's picture and the figures under it, and the pitch from one row's top to the next's.
+const RCARD: f32 = 96.0;
+const RCARD_H: f32 = 52.0;
+const RCARD_WORD: f32 = 22.0;
+const RCARD_ROW: f32 = RCARD_H + RCARD_WORD;
+/// How many resolution cards the pane holds before they are asked for: the least it will show
+/// (see `display_pane`; the room given decides whether a row's worth or this is held back).
+const RCARD_ASK: usize = 4;
 /// A slider's track, the room for its value, and its thumb's radius.
 const SLIDER_WIDTH: f32 = 160.0;
 const SLIDER_VALUE: f32 = 44.0;
@@ -1796,6 +1806,8 @@ enum Target {
     NetSelect(String),
     /// Picks a display to show in the preview, by its GDI name.
     ScreenSelect(String),
+    /// Lays out (or holds back) the display's resolution cards beyond the first few.
+    DisplayMore,
     /// Picks a physical disk to show its volumes in the preview, by its number.
     StorageSelect(u32),
     /// Tells a display to wear a mode: its size and rate.
@@ -2387,6 +2399,8 @@ struct Ui {
     /// The network adapter picked to show in its preview, by its name (None = the one in use).
     net_selected: Option<String>,
     display_selected: Option<String>,
+    /// Whether the display's resolution cards are all laid out rather than held to a row's worth.
+    display_more: bool,
     /// The physical disk picked to show its volumes in the storage preview, by its number (None = the first).
     storage_selected: Option<u32>,
     audio_selected: Option<String>,
@@ -2705,6 +2719,7 @@ fn make(gfx: Rc<Gfx>, shown: Option<Option<RECT>>, to: Option<To>) -> Option<HWN
             bt_selected: None,
             net_selected: None,
             display_selected: None,
+            display_more: false,
             storage_selected: None,
             audio_selected: None,
             notify_selected: None,
@@ -6513,6 +6528,12 @@ impl Ui {
             // Picking a display to show in the preview.
             Target::ScreenSelect(name) => {
                 self.display_selected = Some(name);
+                self.display_more = false;
+                self.next_frame = Instant::now();
+            }
+            // The resolution cards laid all out, or held back to the first few.
+            Target::DisplayMore => {
+                self.display_more = !self.display_more;
                 self.next_frame = Instant::now();
             }
             // A display told to wear a mode; left as it was if the driver will not draw it.
@@ -9155,45 +9176,74 @@ impl Ui {
 
         // The sizes as macOS shows them: not a list of figures but the desktop itself at each,
         // its word growing as the pixels thin — the left end larger text, the right more space.
-        // Each card is named with the pixels it stands for; a reading told in halves is no reading.
+        // A few are held at first and the rest asked for with a press: every card shown is a card
+        // that can be worn, so the figures named are never more than a click can reach (and the
+        // size worn, wherever the display puts it in its list, is kept among those shown).
         text_centred(frame, &p("分辨率", "Resolution"), label, palette.text, inner.x, y + 8.0, inner.w, Align::Start);
         y += 24.0;
         if modes.is_empty() {
             text_centred(frame, &p("该显示器未回报可选的分辨率", "This display reports no modes to choose"), small, palette.text3, inner.x, y + 6.0, inner.w, Align::Start);
             y += 24.0;
         } else {
-            let total = modes.len();
-            let picks: Vec<usize> = if total <= 5 {
-                (0..total).collect()
-            } else {
-                (0..5).map(|k| (k as f32 * (total - 1) as f32 / 4.0).round() as usize).collect()
-            };
             let maxpix = modes.first().map(|m| m.wide as f32 * m.tall as f32).unwrap_or(1.0).max(1.0);
             let rgap = 10.0;
-            let rcw = ((inner.w - rgap * (picks.len() as f32 - 1.0)) / picks.len() as f32).max(48.0);
-            let rch = 58.0;
-            for (k, &mi) in picks.iter().enumerate() {
+            let cols = ((inner.w + rgap) / (RCARD + rgap)).floor().max(1.0) as usize;
+            let rcard = ((inner.w - rgap * (cols - 1) as f32) / cols as f32).max(48.0);
+            let held = cols.div_ceil(3).max(RCARD_ASK).min(cols).min(modes.len());
+            let mut shown: Vec<usize> = if self.display_more {
+                (0..modes.len()).collect()
+            } else {
+                (0..held).collect()
+            };
+            if !self.display_more {
+                if let Some(worn) = here.and_then(|c| modes.iter().position(|m| m.wide == c.wide && m.tall == c.tall)) {
+                    if !shown.contains(&worn) {
+                        shown[held - 1] = worn;
+                    }
+                }
+            }
+            let rows = shown.len().div_ceil(cols);
+            for (at, &mi) in shown.iter().enumerate() {
                 let m = modes[mi];
-                let cx = inner.x + k as f32 * (rcw + rgap);
+                let k = at % cols;
+                let cx = inner.x + k as f32 * (rcard + rgap);
+                let cy = y + (at / cols) as f32 * RCARD_ROW;
                 match &wall {
-                    Some(pic) => frame.picture(pic, cx, y, rcw, rch, 5.0, 1.0),
-                    None => fill(frame, palette.hover, cx, y, rcw, rch, 5.0),
+                    Some(pic) => frame.picture(pic, cx, cy, rcard, RCARD_H, 5.0, 1.0),
+                    None => fill(frame, palette.hover, cx, cy, rcard, RCARD_H, 5.0),
                 }
                 // A mock window whose bulk grows as the pixels thin, so a smaller size reads
                 // as bigger text before its numbers are read at all.
                 let grow = (maxpix / (m.wide as f32 * m.tall as f32).max(1.0)).clamp(0.6, 1.8);
-                let (ww, wh) = ((rcw * 0.5 * grow).min(rcw - 8.0), (rch * 0.42 * grow).min(rch - 8.0));
-                let (wx, wy) = (cx + (rcw - ww) / 2.0, y + (rch - wh) / 2.0);
+                let (ww, wh) = ((rcard * 0.5 * grow).min(rcard - 8.0), (RCARD_H * 0.42 * grow).min(RCARD_H - 8.0));
+                let (wx, wy) = (cx + (rcard - ww) / 2.0, cy + (RCARD_H - wh) / 2.0);
                 fill(frame, Color::hex(0x1c1c1c, 0.55), wx, wy, ww, wh, 3.0);
                 fill(frame, Color::hex(0xffffff, 0.7), wx + 4.0, wy + 4.0, (ww * 0.3).max(3.0), (2.0 * grow).min(wh - 8.0).max(1.0), 1.0);
                 let worn = here.is_some_and(|c| c.wide == m.wide && c.tall == m.tall);
-                stroke_inside(frame, Rect { x: cx, y, w: rcw, h: rch }, 5.0, if worn { palette.selection } else { palette.card_stroke });
-                self.targets.push((Rect { x: cx, y, w: rcw, h: rch }, Target::ModeApply { device: device.clone(), wide: m.wide, tall: m.tall, hz: now_hz }));
+                stroke_inside(frame, Rect { x: cx, y: cy, w: rcard, h: RCARD_H }, 5.0, if worn { palette.selection } else { palette.card_stroke });
+                self.targets.push((Rect { x: cx, y: cy, w: rcard, h: RCARD_H }, Target::ModeApply { device: device.clone(), wide: m.wide, tall: m.tall, hz: now_hz }));
                 let figure = format!("{}×{}", m.wide, m.tall);
                 let fw = frame.gfx.measure(&figure, small);
-                text_centred(frame, &figure, small, if worn { palette.text } else { palette.text3 }, cx + (rcw - fw) / 2.0, y + rch + 10.0, fw, Align::Start);
+                text_centred(frame, &figure, small, if worn { palette.text } else { palette.text3 }, cx + (rcard - fw) / 2.0, cy + RCARD_H + 10.0, fw, Align::Start);
             }
-            y += rch + 26.0;
+            y += (rows - 1) as f32 * RCARD_ROW + RCARD_H + 14.0;
+            // The rest of the sizes, asked for or given back: a line of its own under the cards,
+            // centred — set beside the two ends of the scale below it, the button would lean on
+            // the words there and neither would read.
+            if modes.len() > held {
+                let word = if self.display_more {
+                    p("收起", "Fewer")
+                } else {
+                    format!("{}（{}）", p("更多分辨率", "More resolutions"), modes.len() - held)
+                };
+                // (The figures under a row of cards reach some way below its foot, and a button
+                // holds 16 above and below its middle: room for both, or the button leans on the
+                // last card's numbers and the scale's words below lean on the button.)
+                y += 36.0;
+                let wide = frame.gfx.measure(&word, Font::new(Family::Segoe, 14.0, 400.0)) + 32.0;
+                self.button(frame, palette, &word, inner.x + (inner.w + wide) / 2.0, y, Target::DisplayMore, Button::Plain, &None);
+                y += 38.0;
+            }
             text_centred(frame, &p("更大字体", "Larger Text"), small, palette.text3, inner.x, y + 8.0, inner.w * 0.5, Align::Start);
             text_centred(frame, &p("更多空间", "More Space"), small, palette.text3, inner.x + inner.w * 0.5, y + 8.0, inner.w * 0.5, Align::End);
             y += 22.0;
@@ -11049,6 +11099,66 @@ impl Ui {
         if screen.w <= 0.0 || self.stage.size.0 <= 0.0 || !dock.on {
             return;
         }
+        let (size, spacing) = self.dock_on(frame, &dock, screen);
+        // The caption: what the dock is set to, spelled out.
+        let edge = match dock.edge {
+            DockEdge::Top => p("屏幕顶部", "along the top"),
+            DockEdge::Bottom => p("屏幕底部", "along the bottom"),
+        };
+        let swell = if dock.magnify {
+            format!("{} {}×", p("悬停放大到", "swells to"), dock.peak())
+        } else {
+            p("不悬停放大", "no swell")
+        };
+        let mut bits = vec![edge, p("图标", "icons") + &format!(" {}", size.round() as i32), p("间距", "spacing") + &format!(" {}", spacing.round() as i32), swell];
+        if dock.clear > 0.0 {
+            bits.push(format!("{} {:.0}%", p("玻璃透明", "glass clear"), dock.clear * 100.0));
+        }
+        if dock.auto_hide {
+            bits.push(p("自动隐藏", "hidden until reached"));
+        }
+        let line = bits.join(" · ");
+        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
+    }
+
+    /// The launchpad page's preview: the desktop the stage shows washed as the launchpad washes it, and its tiles laid
+    /// in the grid the settings ask for — drawn by the same hand that draws the launchpad, on the programs the shell
+    /// has been found to list (see `super::launchpad`).
+    fn paint_launchpad_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
+        let lang = self.lang;
+        let p = |zh, en| pick(lang, zh, en).to_string();
+        // (Room for the caption under the screen, which the stage is centred in the space left.)
+        let caption = 24.0;
+        let stage = Rect { x: area.x, y: area.y, w: area.w, h: (area.h - caption).max(0.0) };
+        if stage.w <= 0.0 || stage.h <= 0.0 {
+            return;
+        }
+        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
+        let (_, screen) = self.panel_on_stage(frame, stage, None, true, 1.0);
+        stroke_inside(frame, screen, 8.0, palette.card_stroke);
+        if screen.w <= 0.0 || self.stage.size.0 <= 0.0 {
+            return;
+        }
+        let Some((cols, rows, pages, custom)) = self.launchpad_on(frame, screen) else { return };
+        // The caption: how the page lies, and how many pages the programs make in it.
+        let lying = if custom {
+            p("按屏幕自定", "laid for the screen")
+        } else {
+            format!("{cols} × {rows}")
+        };
+        let line = if pages > 1 {
+            format!("{} {} · {} · {} {}", p("每页", "a page"), lying, p("共", "of"), pages, p("页", "pages"))
+        } else {
+            format!("{} {}", p("一页排满", "one page holds"), lying)
+        };
+        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
+    }
+
+    /// The dock as it stands, drawn on `screen` (the stage's whole screen already placed in the window): its row of
+    /// tiles over the desktop, scaled by the screen's own width. Shared by the page's preview and the layout's tile.
+    /// Returns the icon size and spacing it drew, for the preview's caption.
+    fn dock_on(&mut self, frame: &Frame, dock: &crate::settings::DockSettings, screen: Rect) -> (f32, f32) {
+        let lang = self.lang;
         // One stage DIP drawn as this many of the window's: the dock is scaled by the same, so it keeps the size it
         // has against the screen it stands on rather than being drawn large on a small one.
         let k = screen.w / self.stage.size.0;
@@ -11093,45 +11203,14 @@ impl Ui {
             frame.dc.SetTransform(&parent);
             frame.dc.PopAxisAlignedClip();
         }
-        // The caption: what the dock is set to, spelled out.
-        let edge = match dock.edge {
-            DockEdge::Top => p("屏幕顶部", "along the top"),
-            DockEdge::Bottom => p("屏幕底部", "along the bottom"),
-        };
-        let swell = if dock.magnify {
-            format!("{} {}×", p("悬停放大到", "swells to"), dock.peak())
-        } else {
-            p("不悬停放大", "no swell")
-        };
-        let mut bits = vec![edge, p("图标", "icons") + &format!(" {}", size.round() as i32), p("间距", "spacing") + &format!(" {}", spacing.round() as i32), swell];
-        if dock.clear > 0.0 {
-            bits.push(format!("{} {:.0}%", p("玻璃透明", "glass clear"), dock.clear * 100.0));
-        }
-        if dock.auto_hide {
-            bits.push(p("自动隐藏", "hidden until reached"));
-        }
-        let line = bits.join(" · ");
-        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
+        (size, spacing)
     }
 
-    /// The launchpad page's preview: the desktop the stage shows washed as the launchpad washes it, and its tiles laid
-    /// in the grid the settings ask for — drawn by the same hand that draws the launchpad, on the programs the shell
-    /// has been found to list (see `super::launchpad`).
-    fn paint_launchpad_preview(&mut self, frame: &Frame, palette: &Palette, area: Rect) {
-        let lang = self.lang;
-        let p = |zh, en| pick(lang, zh, en).to_string();
-        // (Room for the caption under the screen, which the stage is centred in the space left.)
-        let caption = 24.0;
-        let stage = Rect { x: area.x, y: area.y, w: area.w, h: (area.h - caption).max(0.0) };
-        if stage.w <= 0.0 || stage.h <= 0.0 {
-            return;
-        }
-        fill(frame, palette.card, area.x, area.y, area.w, area.h, 8.0);
-        let (_, screen) = self.panel_on_stage(frame, stage, None, true, 1.0);
-        stroke_inside(frame, screen, 8.0, palette.card_stroke);
-        if screen.w <= 0.0 || self.stage.size.0 <= 0.0 {
-            return;
-        }
+    /// The launchpad's first page, drawn on `screen` (the stage's whole screen already placed in the window): the
+    /// desktop washed, its tiles laid in the grid the settings ask for. Shared by the page's preview and the layout's
+    /// tile. None while the programs are still being listed (the page drawn again when they land); else the columns,
+    /// rows, pages and whether the grid is left to the screen, for the preview's caption.
+    fn launchpad_on(&mut self, frame: &Frame, screen: Rect) -> Option<(usize, usize, usize, bool)> {
         // One stage DIP drawn as this many of the window's: the page is laid in the stage's own DIPs and scaled onto
         // the screen it stands on, so its tiles keep the room they have against a screen of their own.
         let k = screen.w / self.stage.size.0;
@@ -11141,7 +11220,7 @@ impl Ui {
         let Some(all) = crate::station::found::all() else {
             crate::station::found::look(|| {});
             self.next_frame = Instant::now() + Duration::from_millis(1500);
-            return;
+            return None;
         };
         let dock = self.settings.dock.clone();
         let stood = |target: &str| {
@@ -11191,19 +11270,7 @@ impl Ui {
             frame.dc.SetTransform(&parent);
             frame.dc.PopAxisAlignedClip();
         }
-        // The caption: how the page lies, and how many pages the programs make in it.
-        let lying = if dock.pad_cols == 0 || dock.pad_rows == 0 {
-            p("按屏幕自定", "laid for the screen")
-        } else {
-            format!("{} × {}", grid.cols, grid.rows)
-        };
-        let pages = grid.pages(all.len());
-        let line = if pages > 1 {
-            format!("{} {} · {} · {} {}", p("每页", "a page"), lying, p("共", "of"), pages, p("页", "pages"))
-        } else {
-            format!("{} {}", p("一页排满", "one page holds"), lying)
-        };
-        text_centred(frame, &line, Font::new(Family::Segoe, 12.0, 400.0), palette.text2, area.x + 18.0, screen.y + screen.h + 6.0, area.w - 36.0, Align::Start);
+        Some((grid.cols, grid.rows, grid.pages(all.len()), dock.pad_cols == 0 || dock.pad_rows == 0))
     }
 
     /// How the stage is shown in `area` with a panel `pw` wide (stage DIPs) slid out from `edge`: how large a stage

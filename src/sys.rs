@@ -113,19 +113,18 @@ pub fn current(device: &str) -> Option<Mode> {
     if device.is_empty() {
         return None;
     }
-    let name = named(device);
-    let mut dm = DEVMODEW::default();
-    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
-    unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm) }
-        .as_bool()
-        .then(|| Mode { wide: dm.dmPelsWidth, tall: dm.dmPelsHeight, hz: dm.dmDisplayFrequency })
+    current_raw(&named(device))
 }
 
 /// Tells a display to wear a mode, and keeps the change in the registry as
 /// Windows' own panel does: true when it took. A mode the driver will not draw
 /// is refused, and the display is left as it was — so the rate is not forced:
 /// the size is asked for at the rate given, then at every rate the driver lists
-/// for that size, and at last with the rate left to the driver itself.
+/// for that size, and at last with the rate left to the driver itself. What the
+/// display is read wearing afterwards is what it must have been asked for: a
+/// driver that took the call but came out with another size has it put back and
+/// the press reported as refused, rather than a screen saying one thing and
+/// wearing another.
 pub fn set_mode(device: &str, mode: Mode) -> bool {
     if device.is_empty() {
         return false;
@@ -134,12 +133,35 @@ pub fn set_mode(device: &str, mode: Mode) -> bool {
     if wearing(&name, mode) {
         return true;
     }
+    let was = current_raw(&name);
     for hz in rates_of(&name, mode.wide, mode.tall) {
         if hz != mode.hz && wearing(&name, Mode { hz, ..mode }) {
-            return true;
+            return took(&name, &was, mode);
         }
     }
-    wearing_plain(&name, mode.wide, mode.tall)
+    wearing_plain(&name, mode.wide, mode.tall) && took(&name, &was, mode)
+}
+
+/// Whether the display is read wearing `mode`'s size after a change asked for it:
+/// true when it is, else the size it had before (`was`, taken before the asking)
+/// is put back and false told.
+fn took(name: &[u16], was: &Option<Mode>, mode: Mode) -> bool {
+    if current_raw(name).is_some_and(|now| now.wide == mode.wide && now.tall == mode.tall) {
+        return true;
+    }
+    if let Some(was) = was {
+        let _ = wearing(name, *was);
+    }
+    false
+}
+
+/// A display's mode read by its own prepared name, the size and rate it reports.
+fn current_raw(name: &[u16]) -> Option<Mode> {
+    let mut dm = DEVMODEW::default();
+    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm) }
+        .as_bool()
+        .then(|| Mode { wide: dm.dmPelsWidth, tall: dm.dmPelsHeight, hz: dm.dmDisplayFrequency })
 }
 
 /// The rates one size of a display is listed at, fastest first and each but once.
